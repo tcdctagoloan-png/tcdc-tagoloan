@@ -26,8 +26,8 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscurePassword = true;
   bool _rememberMe = false;
 
-  // Standard asset path for Flutter projects (works for all platforms after build)
-  final String logoPath = 'assets/logo/TCDC-LOGO.png'; // Assuming it's a PNG based on the uploaded image.
+  // Standard asset path for all assets (matching the NurseDashboard update)
+  final String logoPath = 'assets/logo/TCDC-LOGO.jpg'; // Changed from .png to .jpg
 
   @override
   void initState() {
