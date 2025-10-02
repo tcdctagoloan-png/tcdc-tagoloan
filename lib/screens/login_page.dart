@@ -1,4 +1,3 @@
-// lib/screens/login_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,6 +25,10 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _rememberMe = false;
+
+  // Standard asset path using conditional logic for web/non-web environments
+  final String logoPath =
+  kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png';
 
   @override
   void initState() {
@@ -154,20 +157,23 @@ class _LoginPageState extends State<LoginPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  // Logo and Title Section
                   Row(
                     children: [
                       Image.asset(
-                        kIsWeb ? 'logo/TCDC-LOGO.jpg' : 'assets/logo/TCDC-LOGO.jpg',
-                        height: 100,
+                        logoPath,
+                        height: 50, // Reduced height for better fit in navigation bar
                         errorBuilder: (context, error, stackTrace) {
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.broken_image, size: 50, color: Colors.red),
+                            child: Icon(Icons.broken_image,
+                                size: 30, color: Colors.red),
                           );
                         },
                       ),
-                      Text(
-                        "Total Care Dialysis Center",
+                      const SizedBox(width: 12), // Added spacing
+                      const Text(
+                        "TOTAL CARE DIALYSIS CENTER",
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -176,9 +182,13 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ],
                   ),
+                  // Navigation Links
                   Row(
                     children: [
-                      _NavItem(label: "Home", onTap: () {}),
+                      _NavItem(label: "Home",
+                      onTap: () =>
+                          Navigator.pushReplacementNamed(context, '/home')
+                      ),
                       _NavItem(label: "Login", onTap: () {}),
                       _NavItem(
                         label: "Register",
@@ -189,7 +199,8 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                       ),
-                      _NavItem(label: "About", onTap: () {}),
+                      _NavItem(label: "About", onTap: ()=>
+                      Navigator.pushReplacementNamed (context, '/about')),
                     ],
                   )
                 ],
@@ -212,6 +223,7 @@ class _LoginPageState extends State<LoginPage> {
                     height: 500,
                     child: Row(
                       children: [
+                        // Left Panel (Welcome Message and Logo)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
@@ -219,17 +231,31 @@ class _LoginPageState extends State<LoginPage> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment:
                               CrossAxisAlignment.start,
-                              children: const [
-                                Text(
-                                  "Welcome 👋",
+                              children: [
+                                // Logo added to the left panel for wide screens
+                                Image.asset(
+                                  logoPath,
+                                  height: 100,
+                                  errorBuilder:
+                                      (context, error, stackTrace) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(8.0),
+                                      child: Icon(Icons.broken_image,
+                                          size: 50, color: Colors.red),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  "Welcome Back!",
                                   style: TextStyle(
                                     fontSize: 36,
                                     fontWeight: FontWeight.bold,
                                     color: Colors.black,
                                   ),
                                 ),
-                                SizedBox(height: 20),
-                                Text(
+                                const SizedBox(height: 20),
+                                const Text(
                                   "Log in to manage your appointments and profile easily.",
                                   style: TextStyle(
                                     fontSize: 18,
@@ -244,6 +270,7 @@ class _LoginPageState extends State<LoginPage> {
                           width: 1,
                           color: Colors.grey.shade300,
                         ),
+                        // Right Panel (Login Form)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
@@ -259,8 +286,21 @@ class _LoginPageState extends State<LoginPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      // Logo added for narrow/mobile screens
+                      Image.asset(
+                        logoPath,
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.broken_image,
+                                size: 50, color: Colors.red),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 24),
                       const Text(
-                        "Welcome 👋",
+                        "Welcome Back!",
                         style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.bold,
@@ -347,8 +387,7 @@ class _LoginPageState extends State<LoginPage> {
               Checkbox(
                 value: _rememberMe,
                 activeColor: Colors.green,
-                onChanged: (val) =>
-                    setState(() => _rememberMe = val ?? false),
+                onChanged: (val) => setState(() => _rememberMe = val ?? false),
               ),
               const Text(
                 "Remember me",

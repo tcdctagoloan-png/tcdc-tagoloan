@@ -668,7 +668,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
                     children: [
                       // Logo
                       Image.asset(
-                        kIsWeb ? 'logo/TCDC-LOGO.jpg' : 'assets/logo/TCDC-LOGO.jpg',
+                        kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png',
                         height: 100,
                         errorBuilder: (context, error, stackTrace) {
                           return const Padding(
