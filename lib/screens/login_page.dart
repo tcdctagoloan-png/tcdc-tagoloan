@@ -1,9 +1,8 @@
-// lib/screens/login_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+// Note: kIsWeb import is often redundant if standard asset paths are used.
 
 // Import dashboards
 import '../patient/patient_dashboard.dart';
@@ -26,6 +25,9 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _rememberMe = false;
+
+  // Standard asset path for Flutter projects (works for all platforms after build)
+  final String logoPath = 'assets/logo/TCDC-LOGO.png'; // Assuming it's a PNG based on the uploaded image.
 
   @override
   void initState() {
@@ -154,20 +156,22 @@ class _LoginPageState extends State<LoginPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  // Logo and Title Section
                   Row(
                     children: [
                       Image.asset(
-                        kIsWeb ? 'logo/TCDC-LOGO.jpg' : 'assets/logo/TCDC-LOGO.jpg',
-                        height: 100,
+                        logoPath,
+                        height: 50, // Reduced height for better fit in navigation bar
                         errorBuilder: (context, error, stackTrace) {
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.broken_image, size: 50, color: Colors.red),
+                            child: Icon(Icons.broken_image, size: 30, color: Colors.red),
                           );
                         },
                       ),
-                      Text(
-                        "Total Care Dialysis Center",
+                      const SizedBox(width: 12), // Added spacing
+                      const Text(
+                        "TOTAL CARE DIALYSIS CENTER",
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -176,6 +180,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ],
                   ),
+                  // Navigation Links
                   Row(
                     children: [
                       _NavItem(label: "Home", onTap: () {}),
@@ -212,6 +217,7 @@ class _LoginPageState extends State<LoginPage> {
                     height: 500,
                     child: Row(
                       children: [
+                        // Left Panel (Welcome Message)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
@@ -221,7 +227,7 @@ class _LoginPageState extends State<LoginPage> {
                               CrossAxisAlignment.start,
                               children: const [
                                 Text(
-                                  "Welcome 👋",
+                                  "Welcome Back!",
                                   style: TextStyle(
                                     fontSize: 36,
                                     fontWeight: FontWeight.bold,
@@ -244,6 +250,7 @@ class _LoginPageState extends State<LoginPage> {
                           width: 1,
                           color: Colors.grey.shade300,
                         ),
+                        // Right Panel (Login Form)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
@@ -260,7 +267,7 @@ class _LoginPageState extends State<LoginPage> {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const Text(
-                        "Welcome 👋",
+                        "Welcome Back!",
                         style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.bold,
