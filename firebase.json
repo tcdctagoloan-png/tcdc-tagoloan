@@ -1,0 +1,31 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "dialysis-app-a008c",
+          "appId": "1:305346711737:android:1fdcae6e6fb4857440cb68",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "dialysis-app-a008c",
+          "configurations": {
+            "android": "1:305346711737:android:1fdcae6e6fb4857440cb68",
+            "ios": "1:305346711737:ios:fbbbcd4ba3e1929d40cb68",
+            "macos": "1:305346711737:ios:fbbbcd4ba3e1929d40cb68",
+            "web": "1:305346711737:web:a5402516c534b62b40cb68",
+            "windows": "1:305346711737:web:3d380a7a9b154bf240cb68"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "database": "(default)",
+    "location": "nam5",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

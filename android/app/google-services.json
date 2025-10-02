@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "305346711737",
+    "project_id": "dialysis-app-a008c",
+    "storage_bucket": "dialysis-app-a008c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:305346711737:android:1fdcae6e6fb4857440cb68",
+        "android_client_info": {
+          "package_name": "com.example.dialysis_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyApc0bgizXrHSo8KFa8eMu_WHN71R3JMbM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
