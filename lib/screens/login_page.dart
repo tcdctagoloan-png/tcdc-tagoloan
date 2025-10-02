@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Import dashboards
 import '../patient/patient_dashboard.dart';
@@ -154,12 +155,19 @@ class _LoginPageState extends State<LoginPage> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Row(
-                    children: const [
-                      Icon(Icons.local_hospital_outlined,
-                          size: 28, color: Colors.green),
-                      SizedBox(width: 8),
+                    children: [
+                      Image.asset(
+                        kIsWeb ? 'logo/TCDC-LOGO.jpg' : 'assets/logo/TCDC-LOGO.jpg',
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.broken_image, size: 50, color: Colors.red),
+                          );
+                        },
+                      ),
                       Text(
-                        "Clinic Appointment System",
+                        "Total Care Dialysis Center",
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
