@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// Note: kIsWeb import is often redundant if standard asset paths are used.
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Import dashboards
 import '../patient/patient_dashboard.dart';
@@ -26,8 +26,9 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscurePassword = true;
   bool _rememberMe = false;
 
-  // Standard asset path for all assets (matching the NurseDashboard update)
-  final String logoPath = 'assets/logo/TCDC-LOGO.jpg'; // Changed from .png to .jpg
+  // Standard asset path using conditional logic for web/non-web environments
+  final String logoPath =
+  kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png';
 
   @override
   void initState() {
@@ -165,7 +166,8 @@ class _LoginPageState extends State<LoginPage> {
                         errorBuilder: (context, error, stackTrace) {
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.broken_image, size: 30, color: Colors.red),
+                            child: Icon(Icons.broken_image,
+                                size: 30, color: Colors.red),
                           );
                         },
                       ),
@@ -183,7 +185,10 @@ class _LoginPageState extends State<LoginPage> {
                   // Navigation Links
                   Row(
                     children: [
-                      _NavItem(label: "Home", onTap: () {}),
+                      _NavItem(label: "Home",
+                      onTap: () =>
+                          Navigator.pushReplacementNamed(context, '/home')
+                      ),
                       _NavItem(label: "Login", onTap: () {}),
                       _NavItem(
                         label: "Register",
@@ -194,7 +199,8 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                       ),
-                      _NavItem(label: "About", onTap: () {}),
+                      _NavItem(label: "About", onTap: ()=>
+                      Navigator.pushReplacementNamed (context, '/about')),
                     ],
                   )
                 ],
@@ -217,7 +223,7 @@ class _LoginPageState extends State<LoginPage> {
                     height: 500,
                     child: Row(
                       children: [
-                        // Left Panel (Welcome Message)
+                        // Left Panel (Welcome Message and Logo)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
@@ -225,8 +231,22 @@ class _LoginPageState extends State<LoginPage> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment:
                               CrossAxisAlignment.start,
-                              children: const [
-                                Text(
+                              children: [
+                                // Logo added to the left panel for wide screens
+                                Image.asset(
+                                  logoPath,
+                                  height: 100,
+                                  errorBuilder:
+                                      (context, error, stackTrace) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(8.0),
+                                      child: Icon(Icons.broken_image,
+                                          size: 50, color: Colors.red),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+                                const Text(
                                   "Welcome Back!",
                                   style: TextStyle(
                                     fontSize: 36,
@@ -234,8 +254,8 @@ class _LoginPageState extends State<LoginPage> {
                                     color: Colors.black,
                                   ),
                                 ),
-                                SizedBox(height: 20),
-                                Text(
+                                const SizedBox(height: 20),
+                                const Text(
                                   "Log in to manage your appointments and profile easily.",
                                   style: TextStyle(
                                     fontSize: 18,
@@ -266,6 +286,19 @@ class _LoginPageState extends State<LoginPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      // Logo added for narrow/mobile screens
+                      Image.asset(
+                        logoPath,
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.broken_image,
+                                size: 50, color: Colors.red),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 24),
                       const Text(
                         "Welcome Back!",
                         style: TextStyle(
@@ -354,8 +387,7 @@ class _LoginPageState extends State<LoginPage> {
               Checkbox(
                 value: _rememberMe,
                 activeColor: Colors.green,
-                onChanged: (val) =>
-                    setState(() => _rememberMe = val ?? false),
+                onChanged: (val) => setState(() => _rememberMe = val ?? false),
               ),
               const Text(
                 "Remember me",

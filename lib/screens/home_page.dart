@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Import for kIsWeb
 import 'register_page.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+// FIXED: Changed import from 'about.dart' to 'about_us_page.dart'
+import 'about.dart';
+// Note: LoginPage is assumed to be accessible via named route (/login).
 
 class HomePage extends StatelessWidget {
   final String username;
 
   const HomePage({super.key, required this.username});
 
+  final String logoPath =
+  kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png';
+
   @override
   Widget build(BuildContext context) {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
+    // Determine the user name to display
+    final displayedUsername = username.isEmpty || username == 'Guest' ? 'Guest' : username;
+
 
     return Scaffold(
       backgroundColor: Colors.grey[100],
@@ -22,12 +33,20 @@ class HomePage extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  // FIXED: Added Logo Asset
                   Row(
-                    children: const [
-                      Icon(Icons.local_hospital_outlined,
-                          size: 28, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text(
+                    children: [
+                      Image.asset(
+                        logoPath,
+                        height: 50,
+                        errorBuilder: (context, error, stackTrace) {
+                          // Fallback icon if asset fails to load
+                          return const Icon(Icons.local_hospital_outlined,
+                              size: 28, color: Colors.green);
+                        },
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
                         "TOTAL CARE DIALYSIS CENTER",
                         style: TextStyle(
                           fontSize: 20,
@@ -37,18 +56,22 @@ class HomePage extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // FIXED: Functional Navigation Links
                   Row(
                     children: [
+                      // Home: Navigates to itself, replacing the current route (should only be used in App-Shell navigation)
                       _NavItem(
                         label: "Home",
                         onTap: () =>
                             Navigator.pushReplacementNamed(context, '/home'),
                       ),
+                      // Login: Navigates to the login page
                       _NavItem(
                         label: "Login",
                         onTap: () =>
                             Navigator.pushReplacementNamed(context, '/login'),
                       ),
+                      // Register: Navigates to the register page
                       _NavItem(
                         label: "Register",
                         onTap: () => Navigator.push(
@@ -56,10 +79,14 @@ class HomePage extends StatelessWidget {
                           MaterialPageRoute(builder: (_) => const RegisterPage()),
                         ),
                       ),
+                      // FIXED: About navigates directly to AboutUsPage using MaterialPageRoute
                       _NavItem(
                         label: "About",
                         onTap: () =>
-                            Navigator.pushReplacementNamed(context, '/about'),
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const AboutUsPage()),
+                            ),
                       ),
                     ],
                   )
@@ -77,14 +104,15 @@ class HomePage extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
+                  // FIXED: Card width capped at 500 for better wide-screen look
                   child: Container(
-                    width: isWideScreen ? 700 : 400,
+                    width: isWideScreen ? 500 : 400,
                     padding: const EdgeInsets.all(32.0),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          "Welcome, $username 👋",
+                          "Welcome, $displayedUsername 👋",
                           style: const TextStyle(
                             fontSize: 32,
                             fontWeight: FontWeight.bold,
