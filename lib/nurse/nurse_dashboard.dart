@@ -75,9 +75,12 @@ class _NurseDashboardState extends State<NurseDashboard> {
         .where('role', isEqualTo: 'patient')
         .get();
 
+    // Fetch appointments that are in the future or on the current day
+    DateTime startOfToday = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+
     final appointmentsSnapshot = await FirebaseFirestore.instance
         .collection('appointments')
-        .where('date', isGreaterThanOrEqualTo: DateTime.now())
+        .where('date', isGreaterThanOrEqualTo: startOfToday)
         .get();
 
     final allPatientIds = allPatientsSnapshot.docs.map((doc) => doc.id).toSet();
@@ -803,7 +806,9 @@ class _NurseDashboardState extends State<NurseDashboard> {
           ),
           Expanded(
             child: Container(
-              color: Colors.white,
+              // REMOVED CARD EFFECT: Match the background of the main content area
+              // to the Scaffold background (Colors.grey[100]).
+              color: Colors.grey[100],
               padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
               child: _pages[_currentIndex],
             ),
@@ -853,19 +858,25 @@ class _WebNavItem extends StatelessWidget {
                       color: Colors.white,
                       fontSize: 10,
                       fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center, // <-- CLOSING LINE
                 ),
               ),
             ),
         ],
       ),
-      title: Text(label,
-          style: TextStyle(
-            color: isSelected ? Colors.green : Colors.black54,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          )),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: isSelected ? Colors.green : Colors.black87,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+        ),
+      ),
       selected: isSelected,
-      selectedTileColor: Colors.green.withOpacity(0.1),
       onTap: () => onTap(index),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+      ),
+      selectedTileColor: Colors.green.shade50,
     );
   }
 }
