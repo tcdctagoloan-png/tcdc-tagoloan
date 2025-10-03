@@ -27,6 +27,8 @@ class _RegisterPageState extends State<RegisterPage> {
   String? _verificationId; // Stores the ID needed to verify the SMS code
   int? _forceResendingToken; // Stores the token for resending the code
 
+  // We are forcing the app to stay on Step 0 until a full SMS solution is ready.
+  // We keep _currentStep, but the flow will now bypass the verification screen.
   int _currentStep = 0;
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -65,31 +67,27 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   // Step 1: Handle actual Firebase phone verification request
+  // NOTE: THIS FUNCTION IS NOW COMMENTED OUT AND BYPASSED.
+  /*
   void _sendVerificationCode(String phoneNumber) async {
     log('Attempting to send code to $phoneNumber');
 
-    // Clear previous verification state
     _verificationCodeController.clear();
     _verificationId = null;
 
     try {
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: phoneNumber,
-        // Mandated callback when verification is automatically completed (rare in registration)
         verificationCompleted: (PhoneAuthCredential credential) async {
           log("Phone verification completed automatically.");
-          // Since this is a new registration, we treat automatic completion as success
-          // and move directly to finalizing the Firestore data.
           await _finalizeRegistration(credential);
         },
-        // Mandated callback for errors (e.g., invalid phone, reCAPTCHA failure)
         verificationFailed: (FirebaseAuthException e) {
           log('Verification Failed: ${e.code} | ${e.message}');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  // Specific warning for common iframe issue
                   e.code == 'web-captcha-failed' || e.code == 'invalid-verification-code'
                       ? "Error: Phone Auth failed. (Code: ${e.code}). In this web environment, reCAPTCHA frequently fails. Please check console for details."
                       : "Phone Auth Error: ${e.message}",
@@ -101,18 +99,17 @@ class _RegisterPageState extends State<RegisterPage> {
             );
             setState(() {
               _isLoading = false;
-              _currentStep = 0; // Go back to form if sending fails
+              _currentStep = 0;
             });
           }
         },
-        // Mandated callback when the code has been successfully sent
         codeSent: (String verificationId, int? resendToken) {
           log('Code Sent. Verification ID: $verificationId');
           if (mounted) {
             setState(() {
               _verificationId = verificationId;
               _forceResendingToken = resendToken;
-              _currentStep = 1; // Move to the verification screen
+              _currentStep = 1;
               _isLoading = false;
             });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -123,12 +120,11 @@ class _RegisterPageState extends State<RegisterPage> {
             );
           }
         },
-        // Mandated callback for auto-retrieval timeout
         codeAutoRetrievalTimeout: (String verificationId) {
           log('Code retrieval timed out. Verification ID: $verificationId');
           if (mounted) {
             setState(() {
-              _verificationId = verificationId; // Keep the ID for manual entry
+              _verificationId = verificationId;
             });
           }
         },
@@ -143,9 +139,11 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     }
   }
+  */
 
   // Step 2: Finalize registration by verifying code and updating Firestore
-  Future<void> _finalizeRegistration(PhoneAuthCredential credential) async {
+  // We've simplified this function to proceed without a PhoneAuthCredential.
+  Future<void> _finalizeRegistration() async {
     // Ensure the current user is available (from the email/password sign-up)
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -159,10 +157,13 @@ class _RegisterPageState extends State<RegisterPage> {
     }
 
     try {
-      // 1. We don't need to sign in, but successfully creating the credential confirms the number.
-      // In a more complex app, you might link the phone number here using user.linkWithCredential(credential).
+      // 1. **FUTURE IMPLEMENTATION POINT:**
+      //    This is where you would place the logic to send a welcome/verification
+      //    SMS via Twilio's API (after you set up Cloud Functions).
+      //
+      //    For now, we proceed immediately.
 
-      // 2. Update user document in Firestore, marking contactVerified: true
+      // 2. Update user document in Firestore, marking contactVerified: false (temporarily)
       await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
         'fullName': _fullNameController.text.trim(),
         'username': _usernameController.text.trim(),
@@ -171,15 +172,15 @@ class _RegisterPageState extends State<RegisterPage> {
         'address': _addressController.text.trim(),
         'role': 'patient',
         'verified': false,
-        'contactVerified': true, // SUCCESS: Contact is now verified
+        'contactVerified': false, // TEMPORARILY SET TO FALSE until a live SMS check is added
         'createdAt': FieldValue.serverTimestamp(),
       });
 
       // 3. Send notification to admin
       await FirebaseFirestore.instance.collection('notifications').add({
-        'title': 'New Patient Registered (Contact Verified)',
+        'title': 'New Patient Registered (Contact UNVERIFIED)',
         'message':
-        '${_fullNameController.text.trim()} has registered and verified their contact.',
+        '${_fullNameController.text.trim()} has registered. Contact needs external verification.',
         'targetRole': 'admin',
         'isRead': false,
         'createdAt': FieldValue.serverTimestamp(),
@@ -188,7 +189,7 @@ class _RegisterPageState extends State<RegisterPage> {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Registration complete! Contact verified. Please login.")),
+        const SnackBar(content: Text("Registration complete! Please login.")),
       );
 
       // Navigate back to the login page after success
@@ -210,50 +211,27 @@ class _RegisterPageState extends State<RegisterPage> {
     }
   }
 
-  // --- FLOW HANDLER ---
+  // --- FLOW HANDLER (MODIFIED) ---
   Future<void> _handleRegistrationFlow() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
 
+    // Step 0: Create account and skip phone verification step
+    // When the user clicks "N E X T (Send Code)" (now just "R E G I S T E R"),
+    // we create the user and immediately finalize the registration.
     if (_currentStep == 0) {
-      // Step 0: Create account and initiate phone verification
       final userCred = await _createUserWithEmailPassword();
       if (userCred != null) {
-        // Now that the user is created (and signed in), send the verification code
-        _sendVerificationCode(_contactController.text.trim());
+        // If account creation succeeds, immediately move to finalize registration
+        await _finalizeRegistration();
+        // Note: The UI for _currentStep will still be 0, but the function will exit
+        // and navigate to the login page on success.
       } else {
         setState(() => _isLoading = false);
       }
 
-    } else if (_currentStep == 1) {
-      // Step 1: Validate code and complete registration
-      if (_verificationId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Verification ID is missing. Please restart the process.")),
-        );
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      try {
-        // Create the credential object using the ID from codeSent and user's SMS code
-        final PhoneAuthCredential credential = PhoneAuthProvider.credential(
-          verificationId: _verificationId!,
-          smsCode: _verificationCodeController.text.trim(),
-        );
-
-        // Finalize registration
-        await _finalizeRegistration(credential);
-      } on Exception catch (e) {
-        log('Code validation error: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Invalid verification code. Please try again.")),
-          );
-          setState(() => _isLoading = false);
-        }
-      }
     }
+    // The previous Step 1 logic (verification) is now unreachable and removed from here.
   }
 
   // Helper for input decoration consistency
@@ -308,7 +286,7 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  // --- New Widget for Contact Verification ---
+  // --- New Widget for Contact Verification (NO LONGER USED IN THIS FLOW) ---
   Widget _buildVerificationForm() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -321,7 +299,8 @@ class _RegisterPageState extends State<RegisterPage> {
         ),
         const SizedBox(height: 10),
         Text(
-          "Enter the 6-digit code sent to ${_contactController.text.trim()}.",
+          // Note: This text is misleading now, as no code was sent via SMS.
+          "Verification is temporarily disabled. Click REGISTER below to complete setup.",
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
         ),
@@ -351,11 +330,12 @@ class _RegisterPageState extends State<RegisterPage> {
 
         const SizedBox(height: 10),
         TextButton(
-          onPressed: _isLoading ? null : () => _sendVerificationCode(_contactController.text.trim()),
+          // Disabled resend button since we are not sending codes
+          onPressed: null,
           child: Text(
-            _isLoading ? "Sending..." : "Resend Code",
+            "Resend Code (Disabled)",
             style: TextStyle(
-              color: _primaryGreen,
+              color: Colors.grey.shade400,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -550,11 +530,11 @@ class _RegisterPageState extends State<RegisterPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // --- Header ---
-                  Icon(_currentStep == 0 ? Icons.person_add : Icons.phone_android, size: 80, color: _primaryGreen),
+                  Icon(Icons.person_add, size: 80, color: _primaryGreen),
                   const SizedBox(height: 16),
-                  Text(
-                    _currentStep == 0 ? "Create Account" : "Verify Contact",
-                    style: const TextStyle(
+                  const Text(
+                    "Create Account",
+                    style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
                       color: Colors.black87,
@@ -562,17 +542,17 @@ class _RegisterPageState extends State<RegisterPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _currentStep == 0
-                        ? "Register as a patient and verify your phone number."
-                        : "We sent a verification code to your number.",
+                    // Updated descriptive text
+                    "Complete registration. Phone verification is temporarily disabled.",
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.black54, fontSize: 16),
                   ),
                   const SizedBox(height: 32),
 
                   // --- Conditional Form Content ---
-                  if (_currentStep == 0) _buildRegistrationForm(isMobile),
-                  if (_currentStep == 1) _buildVerificationForm(),
+                  // Only show the registration form since step 1 is skipped
+                  _buildRegistrationForm(isMobile),
+                  // if (_currentStep == 1) _buildVerificationForm(), // Removed
 
                   const SizedBox(height: 30),
 
@@ -590,10 +570,12 @@ class _RegisterPageState extends State<RegisterPage> {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
                       ),
+                      // Button always triggers the registration flow
                       onPressed: _handleRegistrationFlow,
-                      child: Text(
-                        _currentStep == 0 ? "N E X T (Send Code)" : "V E R I F Y & R E G I S T E R",
-                        style: const TextStyle(
+                      child: const Text(
+                        // Changed text to reflect the immediate registration
+                        "R E G I S T E R",
+                        style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
@@ -605,40 +587,18 @@ class _RegisterPageState extends State<RegisterPage> {
                   const SizedBox(height: 20),
 
                   // --- Navigation Link ---
-                  if (_currentStep == 0)
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text(
-                        "Already have an account? Login here",
-                        style: TextStyle(
-                          color: _primaryGreen,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          decoration: TextDecoration.underline,
-                        ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(
+                      "Already have an account? Login here",
+                      style: TextStyle(
+                        color: _primaryGreen,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        decoration: TextDecoration.underline,
                       ),
                     ),
-                  if (_currentStep == 1)
-                    TextButton(
-                      onPressed: () {
-                        // Return to registration form
-                        setState(() {
-                          _currentStep = 0;
-                          _verificationCodeController.clear();
-                          _verificationId = null;
-                        });
-                        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                      },
-                      child: Text(
-                        "Go back and edit details",
-                        style: TextStyle(
-                          color: _primaryGreen,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          decoration: TextDecoration.underline,
-                        ),
-                      ),
-                    ),
+                  ),
                 ],
               ),
             ),
