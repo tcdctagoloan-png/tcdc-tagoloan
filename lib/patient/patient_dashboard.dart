@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:convert'; // Required for Base64 decoding (base64Decode)
 
 import 'appointment_page.dart';
 import 'book_page.dart' as booking;
@@ -27,6 +28,9 @@ class _PatientDashboardState extends State<PatientDashboard> {
   late final List<Widget> _pages;
   late final String _patientId;
   int _unreadNotifications = 0;
+
+  // State for Base64 image to display in the sidebar
+  String? _profileImageBase64;
 
   final List<String> _titles = [
     "Home",
@@ -61,6 +65,8 @@ class _PatientDashboardState extends State<PatientDashboard> {
   Future<void> _loadUsername() async {
     bool isVerified = false;
     String name = '';
+    String? base64Image;
+
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -71,6 +77,9 @@ class _PatientDashboardState extends State<PatientDashboard> {
         final data = doc.data()!;
         name = (data['username'] ?? data['fullName'] ?? '').toString();
         isVerified = data['verified'] == true;
+
+        // Fetch Base64 image data
+        base64Image = data['profileImageBase64'];
       }
     } catch (_) {
       name = ''; // Keep name empty on error
@@ -78,6 +87,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
       if (mounted) {
         setState(() {
           _username = name;
+          _profileImageBase64 = base64Image; // Update state with Base64 image data
           _loadingName = false;
           _pages[0] = HomePage(username: _username);
 
@@ -131,7 +141,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
 
     if (!isWideScreen) {
-      // Mobile version (No changes needed here for the sidebar/image card)
+      // Mobile version (BottomNavigationBar fixes applied here)
       return Scaffold(
         backgroundColor: Colors.grey[100],
         body: Column(
@@ -158,8 +168,11 @@ class _PatientDashboardState extends State<PatientDashboard> {
           unselectedItemColor: Colors.grey,
           items: [
             const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+            // FIX: Wrapped Icons.calendar_today with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: "Appointments"),
+            // FIX: Wrapped Icons.add_circle_outline with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), label: "Book"),
+            // FIX: Wrapped Icons.person with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
             BottomNavigationBarItem(
               icon: Stack(
@@ -200,6 +213,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
               ),
               label: "Notifications",
             ),
+            // FIX: Wrapped Icons.bar_chart with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: "History"),
           ],
         ),
@@ -253,13 +267,14 @@ class _PatientDashboardState extends State<PatientDashboard> {
                   ),
                 ),
                 const Divider(),
-                // NEW: Patient Info Card
+                // Patient Info Card
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
                   child: _PatientInfoCard(
                     username: _username,
                     email: _userEmail,
                     isLoading: _loadingName,
+                    profileImageBase64: _profileImageBase64, // PASS THE BASE64 IMAGE DATA
                   ),
                 ),
                 const Divider(),
@@ -298,22 +313,70 @@ class _PatientDashboardState extends State<PatientDashboard> {
   }
 }
 
-// === NEW WIDGET: Patient Info Card ===
+// === WIDGET: Patient Info Card (UPDATED to handle Base64 image) ===
 class _PatientInfoCard extends StatelessWidget {
   final String username;
   final String email;
   final bool isLoading;
+  final String? profileImageBase64; // NEW: Added parameter for Base64 image
 
   const _PatientInfoCard({
     required this.username,
     required this.email,
     required this.isLoading,
+    this.profileImageBase64, // NEW
   });
 
   @override
   Widget build(BuildContext context) {
     // Determine the name to display (show email if username isn't loaded yet)
     final displayName = isLoading ? 'Loading...' : (username.isNotEmpty ? username : email);
+
+    // Determine the widget to display for the profile picture
+    Widget profileWidget;
+
+    if (isLoading) {
+      // Loading state
+      profileWidget = const Center(
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+            color: Colors.white,
+            strokeWidth: 2,
+          ),
+        ),
+      );
+    } else if (profileImageBase64 != null && profileImageBase64!.isNotEmpty) {
+      // Image available (Base64) - Decode and display
+      try {
+        final imageBytes = base64Decode(profileImageBase64!);
+        profileWidget = ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(
+            imageBytes,
+            fit: BoxFit.cover,
+            width: 48,
+            height: 48,
+          ),
+        );
+      } catch (e) {
+        // Fallback on decoding error
+        profileWidget = const Icon(
+          Icons.error,
+          color: Colors.white,
+          size: 28,
+        );
+      }
+    } else {
+      // Default icon fallback (No image available)
+      profileWidget = const Icon(
+        Icons.person,
+        color: Colors.white,
+        size: 28,
+      );
+    }
+
 
     return Card(
       elevation: 0,
@@ -323,7 +386,7 @@ class _PatientInfoCard extends StatelessWidget {
         padding: const EdgeInsets.all(12.0),
         child: Row(
           children: [
-            // Profile Icon/Placeholder
+            // Profile Icon/Placeholder/Image Container
             Container(
               width: 48,
               height: 48,
@@ -331,22 +394,7 @@ class _PatientInfoCard extends StatelessWidget {
                 color: Colors.green.shade300,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: isLoading
-                  ? const Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
-                  ),
-                ),
-              )
-                  : const Icon(
-                Icons.person,
-                color: Colors.white,
-                size: 28,
-              ),
+              child: profileWidget, // Use the determined profile widget
             ),
             const SizedBox(width: 12),
             // Name and Email

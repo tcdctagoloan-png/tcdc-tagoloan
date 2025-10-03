@@ -1,12 +1,11 @@
 import 'dart:typed_data'; // Needed for Uint8List
+import 'dart:convert'; // NEW: Added for Base64 encoding/decoding
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+// REMOVED: import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-
-// Note: dart:io is removed as it's not supported on Flutter Web.
 
 class ProfilePage extends StatefulWidget {
   final String userId;
@@ -17,6 +16,10 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  // --- Constants for Base64 Image Handling ---
+  // The max size for a Firestore document is 1MB. We enforce this limit on the image file size.
+  static const int _maxFileSize = 1048576; // 1MB in bytes
+
   // Controllers for the form fields
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
@@ -25,9 +28,12 @@ class _ProfilePageState extends State<ProfilePage> {
   final _contactController = TextEditingController();
   final _addressController = TextEditingController();
 
-  // State variables for profile image (using Uint8List for web compatibility) and loading status
-  Uint8List? _profileImageBytes; // Stores image data as bytes for web
-  String? _profileImageUrl;
+  // State variables for profile image
+  // Stores image data as bytes temporarily after picking, before encoding/saving
+  Uint8List? _profileImageBytes;
+  // Stores the Base64 string fetched from or saved to Firestore
+  String? _profileImageBase64;
+
   bool _isLoading = false;
 
   // State variables for non-editable details
@@ -67,7 +73,10 @@ class _ProfilePageState extends State<ProfilePage> {
           _emailController.text = data['email'] ?? '';
           _contactController.text = data['contactNumber'] ?? '';
           _addressController.text = data['address'] ?? '';
-          _profileImageUrl = data['profileImage'];
+
+          // NEW: Fetch the Base64 string from a new field
+          _profileImageBase64 = data['profileImageBase64'];
+
           _role = data['role'] ?? 'Patient';
           _verified = data['verified'] == true;
           final ts = data['createdAt'] as Timestamp?;
@@ -83,36 +92,46 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  /// Opens the gallery to pick a new profile image.
+  /// Opens the gallery to pick a new profile image, checks size, and stores bytes.
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile =
-    await picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+    // Using a low imageQuality helps ensure the resulting Base64 string stays under the 1MB limit.
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
+
     if (pickedFile != null) {
-      // FIX for Web: Read the file data as bytes instead of creating a dart:io File object
       final bytes = await pickedFile.readAsBytes();
+
+      // CRITICAL: File Size Check for Firestore 1MB limit
+      if (bytes.lengthInBytes > _maxFileSize) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Image too large! Max 1MB allowed for Base64 storage."),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Store the newly picked bytes temporarily
       setState(() => _profileImageBytes = bytes);
     }
   }
 
-  /// Handles the save operation: uploading image, updating password, and updating Firestore.
+  /// Handles the save operation: encoding image, updating password, and updating Firestore.
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
 
     try {
-      String? imageUrl = _profileImageUrl;
+      String? base64ToSave = _profileImageBase64; // Start with the existing string
 
-      // 1. Upload new image if selected (using bytes for web compatibility)
+      // 1. Convert new image bytes to Base64 string if selected
       if (_profileImageBytes != null) {
-        final storageRef = FirebaseStorage.instance
-            .ref()
-            .child(
-            'profile_images/${widget.userId}_${DateTime.now().millisecondsSinceEpoch}.jpg');
-
-        // FIX for Web: Use putData for uploading Uint8List (bytes)
-        final uploadTask = await storageRef.putData(_profileImageBytes!, SettableMetadata(contentType: 'image/jpeg'));
-        imageUrl = await uploadTask.ref.getDownloadURL();
+        // Encode the newly picked bytes into a Base64 string
+        base64ToSave = base64Encode(_profileImageBytes!);
+        // NOTE: No Firebase Storage upload needed!
       }
 
       // 2. Update password if field is not empty
@@ -122,9 +141,11 @@ class _ProfilePageState extends State<ProfilePage> {
         if (user != null) {
           // This operation requires the user to have recently signed in
           await user.updatePassword(password);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Password updated successfully!")),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Password updated successfully!")),
+            );
+          }
         }
       }
 
@@ -137,18 +158,22 @@ class _ProfilePageState extends State<ProfilePage> {
         'email': _emailController.text.trim(),
         'contactNumber': _contactController.text.trim(),
         'address': _addressController.text.trim(),
-        'profileImage': imageUrl,
+        // NEW: Save the Base64 string to the document
+        'profileImageBase64': base64ToSave,
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Profile details updated successfully!")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Profile details updated successfully!")),
+        );
+      }
 
       // Reset temporary states after successful save
       _passwordController.clear();
       setState(() {
         _profileImageBytes = null; // Clear temporary bytes
-        _profileImageUrl = imageUrl; // Update network URL
+        // Update the persistent state with the new Base64 string
+        _profileImageBase64 = base64ToSave;
       });
 
     } on FirebaseAuthException catch (e) {
@@ -156,11 +181,15 @@ class _ProfilePageState extends State<ProfilePage> {
       if (e.code == 'requires-recent-login') {
         errorMessage = 'Please sign in again to update your password.';
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(errorMessage)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(errorMessage)));
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Error: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     } finally {
       setState(() => _isLoading = false);
     }
@@ -197,20 +226,28 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// Builds the CircleAvatar for the profile image with proper fallbacks.
+  /// Builds the CircleAvatar for the profile image with proper fallbacks, using Base64.
   Widget _buildProfileImageAvatar() {
     ImageProvider? imageProvider;
     Widget? fallbackChild;
 
-    // Use MemoryImage for the newly picked image bytes (Web compatible)
+    // 1. Priority: Use MemoryImage for the newly picked image bytes (temporary)
     if (_profileImageBytes != null) {
       imageProvider = MemoryImage(_profileImageBytes!);
     }
-    // Fallback to NetworkImage if a URL is already stored
-    else if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty) {
-      imageProvider = NetworkImage(_profileImageUrl!);
+    // 2. Fallback: Use MemoryImage and base64Decode for the existing Base64 string
+    else if (_profileImageBase64 != null && _profileImageBase64!.isNotEmpty) {
+      try {
+        // Decode the Base64 string back into bytes for display
+        final imageBytes = base64Decode(_profileImageBase64!);
+        imageProvider = MemoryImage(imageBytes);
+      } catch (e) {
+        // Handle decoding error (e.g., corrupted string)
+        print('Error decoding saved Base64 image: $e');
+        fallbackChild = Icon(Icons.error, size: 60, color: Colors.red);
+      }
     }
-    // Fallback to Icon if no image data or URL is available
+    // 3. Final Fallback: Icon if no image data is available
     else {
       fallbackChild = Icon(Icons.person, size: 60, color: Colors.blue.shade700);
     }
@@ -222,7 +259,8 @@ class _ProfilePageState extends State<ProfilePage> {
           radius: 60,
           backgroundColor: Colors.blue.shade100,
           backgroundImage: imageProvider,
-          child: fallbackChild,
+          // Only show the fallback child if no image provider was set
+          child: imageProvider == null ? fallbackChild : null,
         ),
         InkWell(
           onTap: _pickImage,
