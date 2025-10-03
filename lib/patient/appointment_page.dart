@@ -45,8 +45,8 @@ class PatientAppointmentsPage extends StatelessWidget {
   bool _canCancel(DateTime appointmentDate) {
     final now = DateTime.now();
     // Allow cancellation if the appointment date is after today.
-    // In a real app, you might check if it's 24 hours in advance, but we'll use a simple day check here.
-    return appointmentDate.isAfter(now.subtract(const Duration(hours: 1)));
+    // We check if it is at least 1 hour in the future to allow for buffer.
+    return appointmentDate.isAfter(now.add(const Duration(hours: 1)));
   }
 
   @override
@@ -200,8 +200,9 @@ class _AppointmentList extends StatelessWidget {
 
             final appointmentDateTime = DateTime(date.year, date.month, date.day, _getSlotHour(slot));
 
+            // FIX: Changed _canCancel to canCancel to use the function passed via constructor.
             // Logic to determine if cancellation is possible
-            final canCancelAppointment = _canCancel(appointmentDateTime) && status != "cancelled" && status != "rejected";
+            final canCancelAppointment = canCancel(appointmentDateTime) && status != "cancelled" && status != "rejected";
 
             // Logic to determine if deletion (cleanup) is possible
             final canDelete = status == "cancelled" || appointmentDateTime.isBefore(DateTime.now());
@@ -327,6 +328,7 @@ class _AppointmentList extends StatelessWidget {
       ),
     );
     if (confirm == true) {
+      // Use the function passed in the constructor
       await cancelAppointment(appointmentId, nurseId, date, slot);
     }
   }
@@ -351,6 +353,7 @@ class _AppointmentList extends StatelessWidget {
       ),
     );
     if (confirm == true) {
+      // Use the function passed in the constructor
       await deleteAppointment(appointmentId, nurseId, date, slot);
     }
   }
