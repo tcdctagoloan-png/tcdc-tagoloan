@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import 'appointment_page.dart';
 import 'book_page.dart' as booking;
@@ -21,6 +22,7 @@ class PatientDashboard extends StatefulWidget {
 class _PatientDashboardState extends State<PatientDashboard> {
   int _index = 0;
   String _username = '';
+  String _userEmail = ''; // To store the user's email
   bool _loadingName = true;
   late final List<Widget> _pages;
   late final String _patientId;
@@ -39,11 +41,14 @@ class _PatientDashboardState extends State<PatientDashboard> {
   void initState() {
     super.initState();
     _patientId = widget.userId;
+    // Get email from current Firebase user
+    _userEmail = FirebaseAuth.instance.currentUser?.email ?? 'N/A';
 
+    // Initialize all pages with either the component or a temporary placeholder
     _pages = [
-      const Center(child: CircularProgressIndicator()), // Home placeholder
+      const Center(child: CircularProgressIndicator()),
       PatientAppointmentsPage(userId: _patientId),
-      const Center(child: CircularProgressIndicator()), // Book placeholder
+      const Center(child: CircularProgressIndicator()),
       ProfilePage(userId: _patientId),
       PatientNotificationPage(userId: _patientId),
       ReportsPage(role: "patient", userId: _patientId),
@@ -54,6 +59,8 @@ class _PatientDashboardState extends State<PatientDashboard> {
   }
 
   Future<void> _loadUsername() async {
+    bool isVerified = false;
+    String name = '';
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -62,30 +69,32 @@ class _PatientDashboardState extends State<PatientDashboard> {
 
       if (doc.exists && doc.data() != null) {
         final data = doc.data()!;
-        _username = (data['username'] ?? data['fullName'] ?? '').toString();
-        final isVerified = data['verified'] == true;
-
-        _pages[2] = isVerified
-            ? SafeArea(child: booking.BookPage(userId: _patientId))
-            : Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              "Booking is disabled until your account is verified.\n\n"
-                  "Please pass all requirements to the admin.",
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 18, color: Colors.grey),
-            ),
-          ),
-        );
+        name = (data['username'] ?? data['fullName'] ?? '').toString();
+        isVerified = data['verified'] == true;
       }
     } catch (_) {
-      _username = '';
+      name = ''; // Keep name empty on error
     } finally {
       if (mounted) {
         setState(() {
+          _username = name;
           _loadingName = false;
           _pages[0] = HomePage(username: _username);
+
+          // Conditionally update the Book page
+          _pages[2] = isVerified
+              ? SafeArea(child: booking.BookPage(userId: _patientId))
+              : const Center(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Text(
+                "Booking is disabled until your account is verified.\n\n"
+                    "Please pass all requirements to the admin.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 18, color: Colors.grey),
+              ),
+            ),
+          );
         });
       }
     }
@@ -122,12 +131,11 @@ class _PatientDashboardState extends State<PatientDashboard> {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
 
     if (!isWideScreen) {
-      // Mobile version with login/register theme
+      // Mobile version (No changes needed here for the sidebar/image card)
       return Scaffold(
         backgroundColor: Colors.grey[100],
         body: Column(
           children: [
-            // No top navbar for mobile, just themed body
             Expanded(
               child: Container(
                 decoration: const BoxDecoration(
@@ -203,19 +211,59 @@ class _PatientDashboardState extends State<PatientDashboard> {
       backgroundColor: Colors.grey[100],
       body: Row(
         children: [
+          // Sidebar Container (240px width, white background)
           Container(
             width: 240,
-            color: Colors.green.shade50,
+            color: Colors.white,
             child: Column(
               children: [
+                // Logo and Clinic Name Header
                 Container(
-                  padding: const EdgeInsets.all(20),
-                  alignment: Alignment.centerLeft,
-                  child: const Text(
-                    "Clinic Appointment",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green),
+                  padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10),
+                  child: Column(
+                    children: [
+                      Image.asset(
+                        kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png',
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.medical_services, size: 50, color: Colors.green),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        "TOTAL CARE DIALYSIS CENTER",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green),
+                      ),
+                      const Text(
+                        "TAGOLOAN BRANCH",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black54),
+                      ),
+                    ],
                   ),
                 ),
+                const Divider(),
+                // NEW: Patient Info Card
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+                  child: _PatientInfoCard(
+                    username: _username,
+                    email: _userEmail,
+                    isLoading: _loadingName,
+                  ),
+                ),
+                const Divider(),
+                // Navigation Items
                 _WebNavItem(icon: Icons.home_filled, label: "Home", index: 0, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.calendar_today_outlined, label: "Appointments", index: 1, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.add_box_outlined, label: "Book", index: 2, currentIndex: _index, onTap: _onTap),
@@ -250,6 +298,90 @@ class _PatientDashboardState extends State<PatientDashboard> {
   }
 }
 
+// === NEW WIDGET: Patient Info Card ===
+class _PatientInfoCard extends StatelessWidget {
+  final String username;
+  final String email;
+  final bool isLoading;
+
+  const _PatientInfoCard({
+    required this.username,
+    required this.email,
+    required this.isLoading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Determine the name to display (show email if username isn't loaded yet)
+    final displayName = isLoading ? 'Loading...' : (username.isNotEmpty ? username : email);
+
+    return Card(
+      elevation: 0,
+      color: Colors.green.shade50,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Row(
+          children: [
+            // Profile Icon/Placeholder
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.green.shade300,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: isLoading
+                  ? const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                ),
+              )
+                  : const Icon(
+                Icons.person,
+                color: Colors.white,
+                size: 28,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Name and Email
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    displayName,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade800,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    email,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// === WIDGET: Navigation Item ===
 class _WebNavItem extends StatelessWidget {
   final IconData icon;
   final String label;

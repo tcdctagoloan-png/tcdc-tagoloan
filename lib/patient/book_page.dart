@@ -1,4 +1,3 @@
-// book_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -37,6 +36,8 @@ class _BookPageState extends State<BookPage> {
 
   Future<void> _bookSlot(String slot) async {
     try {
+      // 1. CHECK FOR EXISTING ACTIVE BOOKING
+      // Prevents patient from having multiple active (pending/approved/rescheduled) appointments.
       QuerySnapshot existing = await FirebaseFirestore.instance
           .collection('appointments')
           .where('patientId', isEqualTo: widget.userId)
@@ -50,21 +51,24 @@ class _BookPageState extends State<BookPage> {
         return;
       }
 
+      // 2. CREATE NEW APPOINTMENT
       DocumentReference appointmentRef = await FirebaseFirestore.instance
           .collection('appointments')
           .add({
         'patientId': widget.userId,
+        // Store only the date part as a Timestamp for consistent querying
         'date': Timestamp.fromDate(
           DateTime(selectedDate.year, selectedDate.month, selectedDate.day),
         ),
         'slot': slot,
-        'bedName': null,
+        'bedName': null, // Bed will be assigned by the nurse/admin later
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       });
 
+      // 3. CREATE NOTIFICATION FOR ADMINS/NURSES
       await FirebaseFirestore.instance.collection('notifications').add({
-        'nurseId': 'all',
+        'nurseId': 'all', // Targeting all administrative roles
         'title': 'New Appointment',
         'message': 'Patient booked $slot on ${selectedDate.toLocal().toString().split(' ')[0]}',
         'appointmentId': appointmentRef.id,
@@ -87,6 +91,7 @@ class _BookPageState extends State<BookPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Date object containing only year, month, and day for query comparison
     DateTime onlyDate =
     DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
 
@@ -113,9 +118,11 @@ class _BookPageState extends State<BookPage> {
                 ),
               ),
               Expanded(
+                // 1. Stream for Admin Session Disablement
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('session')
+                  // Filter sessions for the selected date only
                       .where('sessionDate', isEqualTo: Timestamp.fromDate(onlyDate))
                       .snapshots(),
                   builder: (context, sessionSnap) {
@@ -126,28 +133,29 @@ class _BookPageState extends State<BookPage> {
                     Map<String, bool> enabledMap =
                     {for (var s in allSlots) s: true};
 
+                    // Check which slots the admin has explicitly disabled
                     for (var doc in sessionSnap.data?.docs ?? []) {
                       String slot = doc['slot'];
                       bool enabled = doc['isActive'] ?? true;
                       enabledMap[slot] = enabled;
                     }
 
+                    // 2. Stream for Appointments Count
                     return StreamBuilder<QuerySnapshot>(
                       stream: FirebaseFirestore.instance
                           .collection('appointments')
+                      // Filter appointments by date range (start of day to end of day)
                           .where(
                         'date',
-                        isGreaterThanOrEqualTo: Timestamp.fromDate(
-                          DateTime(onlyDate.year, onlyDate.month, onlyDate.day),
-                        ),
+                        isGreaterThanOrEqualTo: Timestamp.fromDate(onlyDate),
                       )
                           .where(
                         'date',
                         isLessThan: Timestamp.fromDate(
-                          DateTime(onlyDate.year, onlyDate.month, onlyDate.day)
-                              .add(const Duration(days: 1)),
+                          onlyDate.add(const Duration(days: 1)),
                         ),
                       )
+                      // Only count active appointments
                           .where('status',
                           whereIn: ['pending', 'approved', 'rescheduled'])
                           .snapshots(),
@@ -157,9 +165,11 @@ class _BookPageState extends State<BookPage> {
                           return const Center(child: CircularProgressIndicator());
                         }
 
+                        // Initialize counts for all slots
                         Map<String, int> slotCounts =
                         {for (var s in allSlots) s: 0};
 
+                        // Count active appointments per slot
                         for (var doc in appSnap.data?.docs ?? []) {
                           String bookedSlot = doc['slot'];
                           if (slotCounts.containsKey(bookedSlot)) {
@@ -173,7 +183,9 @@ class _BookPageState extends State<BookPage> {
                             String slot = allSlots[index];
                             int bookedCount = slotCounts[slot] ?? 0;
 
+                            // Check availability based on 16 bed limit
                             bool slotFull = bookedCount >= 16;
+                            // Check availability based on Admin control
                             bool adminDisabled = !(enabledMap[slot] ?? true);
                             bool isAvailable = !slotFull && !adminDisabled;
 
@@ -210,7 +222,7 @@ class _BookPageState extends State<BookPage> {
                                 )
                                     : Tooltip(
                                   message: tooltipMsg,
-                                  child: const Text(
+                                  child: Text(
                                     "Unavailable",
                                     style: TextStyle(
                                         color: Colors.red,
@@ -266,6 +278,7 @@ class _BookPageState extends State<BookPage> {
             ),
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
+                // 1. Stream for Admin Session Disablement
                 stream: FirebaseFirestore.instance
                     .collection('session')
                     .where('sessionDate', isEqualTo: Timestamp.fromDate(onlyDate))
@@ -283,20 +296,18 @@ class _BookPageState extends State<BookPage> {
                     enabledMap[slot] = enabled;
                   }
 
+                  // 2. Stream for Appointments Count
                   return StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('appointments')
                         .where(
                       'date',
-                      isGreaterThanOrEqualTo: Timestamp.fromDate(
-                        DateTime(onlyDate.year, onlyDate.month, onlyDate.day),
-                      ),
+                      isGreaterThanOrEqualTo: Timestamp.fromDate(onlyDate),
                     )
                         .where(
                       'date',
                       isLessThan: Timestamp.fromDate(
-                        DateTime(onlyDate.year, onlyDate.month, onlyDate.day)
-                            .add(const Duration(days: 1)),
+                        onlyDate.add(const Duration(days: 1)),
                       ),
                     )
                         .where('status',
@@ -363,7 +374,7 @@ class _BookPageState extends State<BookPage> {
                               )
                                   : Tooltip(
                                 message: tooltipMsg,
-                                child: const Text(
+                                child: Text(
                                   "Unavailable",
                                   style: TextStyle(
                                       color: Colors.red,
