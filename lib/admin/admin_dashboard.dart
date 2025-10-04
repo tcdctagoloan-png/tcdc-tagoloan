@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Admin pages
 import 'admin_appointments.dart';
@@ -25,6 +26,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
   int _unreadNotifications = 0;
   late final List<Widget> _pages;
 
+  // FIX: Declare and initialize the Future for the admin's profile data
+  late Future<DocumentSnapshot<Map<String, dynamic>>> _adminProfileFuture;
+
   final List<String> _titles = [
     "Dashboard",
     "Patients",
@@ -38,6 +42,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
   @override
   void initState() {
     super.initState();
+
+    // Initialize the profile data fetch using the provided userId
+    _adminProfileFuture = FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userId)
+        .get();
 
     _pages = [
       _buildDashboard(),
@@ -113,7 +123,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
           ),
           const SizedBox(height: 12),
-          // FIX: Removed 'const' keyword because we are using string interpolation
+          // Removed 'const' keyword because we are using string interpolation
           // with a dynamic variable (widget.userId).
           Text(
             "Overview of patients, nurses, beds, and appointments. User ID: ${widget.userId}",
@@ -361,31 +371,110 @@ class _AdminDashboardState extends State<AdminDashboard> {
       );
     }
 
+    // Web Layout (Clean, Professional Admin Panel Look)
     return Scaffold(
       backgroundColor: Colors.grey[100],
       body: Row(
         children: [
           Container(
             width: 240,
-            color: Colors.green.shade50,
+            color: Colors.white,
             child: Column(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(20),
-                  alignment: Alignment.centerLeft,
-                  child: Row(
+                  padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10),
+                  child: Column(
                     children: [
-                      const Icon(Icons.local_hospital, color: Colors.green),
-                      const SizedBox(width: 8),
+                      // Logo
+                      Image.asset(
+                        kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png',
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Padding(
+                            padding: EdgeInsets.all(8.0),
+                            child: Icon(Icons.broken_image, size: 50, color: Colors.red),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 4),
                       const Text(
-                        "TCDC",
+                        "TOTAL CARE DIALYSIS CENTER",
+                        textAlign: TextAlign.center,
                         style: TextStyle(
-                            fontSize: 20,
+                            fontSize: 13,
                             fontWeight: FontWeight.bold,
                             color: Colors.green),
                       ),
+                      const Text(
+                        "TAGOLOAN BRANCH",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black54),
+                      ),
                     ],
                   ),
+                ),
+                const Divider(height: 1, color: Colors.black12),
+
+                // --- 2. Admin Profile Section ---
+                FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  future: _adminProfileFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const ListTile(
+                          title: Text("Loading Profile..."),
+                          leading: CircularProgressIndicator.adaptive());
+                    }
+                    // Updated null check to safely access snapshot.data
+                    if (snapshot.hasError || !snapshot.hasData || snapshot.data == null || !snapshot.data!.exists) {
+                      return const ListTile(
+                          title: Text("Profile Error"),
+                          leading: Icon(Icons.person));
+                    }
+
+                    final data = snapshot.data!.data();
+                    final adminName = data?['fullName'] ?? 'Admin User';
+                    final adminEmail = data?['email'] ?? 'Unknown Email';
+
+                    return Container(
+                      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+                      margin: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          const CircleAvatar(
+                            backgroundColor: Colors.green,
+                            child: Icon(Icons.admin_panel_settings, color: Colors.white), // Changed icon to admin-specific
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  adminName,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold, fontSize: 14),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  adminEmail,
+                                  style: const TextStyle(
+                                      fontSize: 10, color: Colors.black54),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
                 _WebNavItem(
                     icon: Icons.dashboard,
@@ -432,9 +521,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     onTap: _onTap),
                 const Spacer(),
                 ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.black54),
+                  leading: const Icon(Icons.logout, color: Colors.black),
                   title: const Text("Logout",
-                      style: TextStyle(color: Colors.black54)),
+                      style: TextStyle(color: Colors.black)),
                   onTap: _logout,
                 ),
                 const SizedBox(height: 20),

@@ -1,7 +1,7 @@
-// nurse_patients_page.dart
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 
 // Helper class to structure patient data with their status
 class PatientData {
@@ -99,6 +99,36 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     return allPatients;
   }
 
+  // --- CAPACITY CHECK HELPER (Checks bed availability for a specific date/slot) ---
+  Future<Map<String, int>> _fetchBedAssignmentCounts(DateTime dateData, String slotData) async {
+    // Ensure the timestamp is for the start of the day for consistent query
+    final DateTime dateOnly = DateTime(dateData.year, dateData.month, dateData.day);
+    final Timestamp startOfDay = Timestamp.fromDate(dateOnly);
+    final Timestamp endOfDay = Timestamp.fromDate(dateOnly.add(const Duration(days: 1)));
+
+    final snap = await FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: startOfDay)
+        .where('date', isLessThan: endOfDay)
+        .where('slot', isEqualTo: slotData.trim())
+        .where('status', isEqualTo: 'approved') // Only count approved assignments
+        .get();
+
+    final Map<String, int> bedCounts = {};
+
+    for (var doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final bedId = data['bedId']?.toString();
+
+      if (bedId != null && bedId.isNotEmpty) {
+        bedCounts[bedId] = (bedCounts[bedId] ?? 0) + 1;
+      }
+    }
+
+    return bedCounts;
+  }
+  // --- END CAPACITY CHECK HELPER ---
+
   // --- Booking Modal / Dialog (UPDATED: Handles Walk-in auto-date setting) ---
   Future<void> _openBookingForm(
       BuildContext context, String patientId, String patientName, bool isWalkIn) async {
@@ -118,7 +148,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
       if (picked != null && picked != selectedDate) {
         setStateInModal(() {
           selectedDate = picked;
-          selectedSlot = null;
+          selectedSlot = null; // Reset slot/bed on date change
           selectedBed = null;
           selectedBedId = null;
         });
@@ -127,49 +157,80 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
     Widget form = StatefulBuilder(
       builder: (context, setStateInModal) {
+        final bool isSlotSelected = selectedSlot != null;
+
         return DefaultTabController(
           length: 2,
           child: Scaffold(
             appBar: AppBar(
               title: Text("Schedule Appointment for $patientName"),
-              actions: [
-                // Hide date picker if it's a walk-in patient (scheduled for today)
-                if (!isWalkIn)
-                  TextButton.icon(
-                    onPressed: () => _pickDate(setStateInModal),
-                    icon: const Icon(Icons.calendar_month, color: Colors.white),
-                    label: Text(
-                      selectedDate.toLocal().toString().split(' ')[0],
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Center(
-                      child: Text(
-                        "Date: ${selectedDate.toLocal().toString().split(' ')[0]} (Walk-in)",
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                const SizedBox(width: 8),
-              ],
-              bottom: const TabBar(
-                tabs: [Tab(text: "Slots"), Tab(text: "Beds")],
-              ),
+              backgroundColor: Colors.blue[700], // Using [] for safety
+              foregroundColor: Colors.white,
             ),
-            body: TabBarView(
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSlotsTab(selectedDate, slots, (slot) {
-                  setStateInModal(() => selectedSlot = slot);
-                }, selectedSlot),
-                _buildBedsTab(selectedDate, (bedId, bedName) {
-                  setStateInModal(() {
-                    selectedBed = bedName;
-                    selectedBedId = bedId;
-                  });
-                }, selectedBedId),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("Selected Date:", style: TextStyle(fontSize: 14, color: Colors.grey)),
+                          Text(
+                            DateFormat('yyyy-MM-dd').format(selectedDate),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[700], // Using [] for safety
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (!isWalkIn)
+                        ElevatedButton.icon(
+                          onPressed: () => _pickDate(setStateInModal),
+                          icon: const Icon(Icons.calendar_month, size: 18),
+                          label: const Text("Change Date"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green[600], // Using [] for safety
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        )
+                      else
+                        Text("Walk-in", style: TextStyle(fontSize: 16, color: Colors.purple[600], fontWeight: FontWeight.bold)), // Using [] for safety
+                    ],
+                  ),
+                ),
+                // Tab Bar for Slots and Beds
+                const TabBar(
+                  tabs: [Tab(text: "Slots"), Tab(text: "Beds")],
+                ),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _buildSlotsTab(selectedDate, slots, (slot) {
+                        setStateInModal(() {
+                          selectedSlot = slot;
+                          // Clear bed selection when slot changes
+                          selectedBed = null;
+                          selectedBedId = null;
+                        });
+                      }, selectedSlot),
+
+                      // **UPDATED:** Pass selectedSlot to the beds tab
+                      _buildBedsTab(selectedDate, selectedSlot, (bedId, bedName) {
+                        setStateInModal(() {
+                          selectedBed = bedName;
+                          selectedBedId = bedId;
+                        });
+                      }, selectedBedId),
+                    ],
+                  ),
+                ),
               ],
             ),
             bottomNavigationBar: Padding(
@@ -184,7 +245,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                     builder: (ctx) => AlertDialog(
                       title: const Text("Confirm Schedule"),
                       content: Text(
-                        "Schedule $patientName on ${selectedDate.toLocal().toString().split(' ')[0]} "
+                        "Schedule $patientName on ${DateFormat('MMM d, yyyy').format(selectedDate)} "
                             "at $selectedSlot in $selectedBed?",
                       ),
                       actions: [
@@ -193,6 +254,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                             child: const Text("Cancel")),
                         ElevatedButton(
                             onPressed: () => Navigator.pop(ctx, true),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white), // Using [] for safety
                             child: const Text("Confirm")),
                       ],
                     ),
@@ -223,6 +285,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text("Appointment scheduled successfully."),
+                      backgroundColor: Colors.green,
                     ),
                   );
                 }
@@ -231,6 +294,8 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                   minimumSize: const Size(double.infinity, 50),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
+                  backgroundColor: Colors.blue[600], // Using [] for safety
+                  foregroundColor: Colors.white,
                 ),
                 child: const Text("Confirm Appointment"),
               ),
@@ -245,7 +310,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
         context: context,
         builder: (ctx) => Dialog(
           insetPadding: const EdgeInsets.all(32),
-          child: SizedBox(width: 700, height: 600, child: form),
+          child: SizedBox(width: 700, height: 650, child: form), // Increased height slightly
         ),
       );
     } else {
@@ -260,10 +325,10 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     }
   }
 
-  // --- Slots Tab (Kept the logic) ---
+  // --- Slots Tab (UPDATED to match design and fix errors) ---
   Widget _buildSlotsTab(DateTime selectedDate, List<String> slots,
       Function(String) onSelect, String? selectedSlot) {
-    // ... (Slot logic remains the same, checking for availability on selectedDate)
+    // Filters appointments by selectedDate and status 'pending', 'approved', 'rescheduled'
     return Padding(
       padding: const EdgeInsets.all(16),
       child: FutureBuilder<QuerySnapshot>(
@@ -292,7 +357,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
             return const Center(child: Text("No slot data available."));
           }
 
-          const int maxSlots = 16;
+          const int maxSlots = 16; // Maximum slots available per time window
           Map<String, int> slotCounts = {for (var s in slots) s: 0};
           for (var doc in apptSnap.data!.docs) {
             final data = doc.data() as Map<String, dynamic>;
@@ -307,25 +372,56 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
             children: slots.map((s) {
               int count = slotCounts[s] ?? 0;
               bool slotFull = count >= maxSlots;
+              bool isSelected = selectedSlot == s;
+              int available = maxSlots - count;
 
-              Color color = slotFull
+              // Use MaterialColor constants which have shades defined
+              final MaterialColor color = slotFull
                   ? Colors.red
-                  : count >= maxSlots * 0.5
-                  ? Colors.orange
                   : Colors.green;
 
-              return Card(
-                elevation: 1,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                child: ListTile(
-                  title: Text(s, style: const TextStyle(fontWeight: FontWeight.w500)),
-                  trailing: Text(
-                    "$count/$maxSlots",
-                    style: TextStyle(color: color, fontWeight: FontWeight.bold),
+              String statusText = slotFull ? "FULL" : "AVAILABLE";
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                      // FIX: Use [] accessor for MaterialColor
+                        color: isSelected ? Colors.blue[700]! : color[300]!,
+                        width: isSelected ? 3 : 1
+                    ),
                   ),
-                  tileColor:
-                  selectedSlot == s ? Colors.blue.withOpacity(0.1) : null,
-                  onTap: slotFull ? null : () => onSelect(s),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                    leading: Icon(
+                      isSelected ? Icons.check_circle : (slotFull ? Icons.cancel : Icons.check_circle_outline),
+                      color: isSelected ? Colors.blue[700] : color, // Use [] accessor for MaterialColor
+                      size: 30,
+                    ),
+                    title: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    subtitle: Text(
+                      "Booked: $count / $maxSlots | Status: $statusText",
+                      // FIX: Use [] accessor for MaterialColor
+                      style: TextStyle(color: color[700], fontSize: 13),
+                    ),
+                    trailing: ElevatedButton.icon(
+                      icon: const Icon(Icons.arrow_forward_ios, size: 16),
+                      label: Text(isSelected ? "Selected" : "Select"),
+                      onPressed: slotFull ? null : () => onSelect(s),
+                      style: ElevatedButton.styleFrom(
+                        // FIX: Use [] accessor for MaterialColor
+                        backgroundColor: isSelected ? Colors.blue[700] : color[600],
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                    onTap: slotFull ? null : () => onSelect(s),
+                    tileColor: isSelected ? Colors.blue.withOpacity(0.05) : null,
+                  ),
                 ),
               );
             }).toList(),
@@ -335,45 +431,128 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     );
   }
 
-  // --- Beds Tab (Kept the logic) ---
-  Widget _buildBedsTab(DateTime selectedDate,
+  // --- Beds Tab (UPDATED to match design and fix errors) ---
+  Widget _buildBedsTab(DateTime selectedDate, String? selectedSlot,
       Function(String, String) onSelect, String? selectedBedId) {
-    // ... (Bed logic remains the same)
+
+    if (selectedSlot == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.access_time_filled, color: Colors.red[400], size: 40),
+              const SizedBox(height: 16),
+              const Text(
+                "Slot Selection Required",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Please select a **time slot** first in the 'Slots' tab to accurately check real-time bed availability for that period.",
+                style: TextStyle(color: Colors.grey, fontSize: 15),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: FutureBuilder<QuerySnapshot>(
-        future: FirebaseFirestore.instance
-            .collection('beds')
-            .where('isWorking', isEqualTo: true)
-            .where('assignedPatient', isEqualTo: '')
-            .orderBy('name')
-            .get(),
-        builder: (context, bedsSnap) {
-          if (bedsSnap.connectionState == ConnectionState.waiting) {
+      child: FutureBuilder<Map<String, int>>(
+        // 1. Fetch capacity counts for the specific date/slot
+        future: _fetchBedAssignmentCounts(selectedDate, selectedSlot),
+        builder: (context, assignmentSnap) {
+          if (assignmentSnap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (!bedsSnap.hasData || bedsSnap.data!.docs.isEmpty) {
-            return const Center(
-                child: Text("No available beds at this moment."));
-          }
 
-          return ListView(
-            children: bedsSnap.data!.docs.map((bedDoc) {
-              String bedId = bedDoc.id;
-              String bedName = bedDoc['name'];
-              return Card(
-                elevation: 1,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                child: ListTile(
-                  title: Text(bedName, style: const TextStyle(fontWeight: FontWeight.w500)),
-                  leading: Icon(Icons.bed, color: selectedBedId == bedId ? Colors.blue : Colors.grey),
-                  tileColor: selectedBedId == bedId
-                      ? Colors.blue.withOpacity(0.1)
-                      : null,
-                  onTap: () => onSelect(bedId, bedName),
-                ),
+          final bedCounts = assignmentSnap.data ?? {};
+          const int maxCapacityPerBed = 4; // Max capacity per bed per slot
+
+          return FutureBuilder<QuerySnapshot>(
+            // 2. Fetch ALL working beds
+            future: FirebaseFirestore.instance
+                .collection('beds')
+                .where('isWorking', isEqualTo: true)
+                .orderBy('name')
+                .get(),
+            builder: (context, bedsSnap) {
+              if (bedsSnap.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (!bedsSnap.hasData || bedsSnap.data!.docs.isEmpty) {
+                return const Center(
+                    child: Text("No working beds are registered in the system."));
+              }
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Date: ${DateFormat('MMM d, yyyy').format(selectedDate)}", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                        Text("Slot: $selectedSlot (Capacity: $maxCapacityPerBed/Bed)", style: TextStyle(color: Colors.grey[700], fontSize: 14)), // Using [] for safety
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      children: bedsSnap.data!.docs.map((bedDoc) {
+                        String bedId = bedDoc.id;
+                        String bedName = (bedDoc.data() as Map<String, dynamic>)['name'] ?? 'Bed ID: $bedId';
+                        final assignedCount = bedCounts[bedId] ?? 0;
+                        final isFull = assignedCount >= maxCapacityPerBed;
+                        final isSelected = selectedBedId == bedId;
+
+                        final MaterialColor color = isFull ? Colors.red : Colors.green;
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8.0),
+                          child: Card(
+                            elevation: 1,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(
+                                  color: isSelected ? Colors.blue[700]! : Colors.transparent, // Using [] for safety
+                                  width: isSelected ? 2 : 1
+                              ),
+                            ),
+                            child: RadioListTile<String>(
+                              title: Text(bedName, style: TextStyle(fontWeight: FontWeight.bold, color: isFull ? Colors.grey : Colors.black87)),
+                              subtitle: Text(
+                                "Assigned: $assignedCount / $maxCapacityPerBed",
+                                // FIX: Use [] accessor for MaterialColor
+                                style: TextStyle(color: color[700], fontSize: 13),
+                              ),
+                              value: bedId,
+                              groupValue: selectedBedId,
+                              onChanged: isFull ? null : (String? value) {
+                                if (value != null) {
+                                  onSelect(value, bedName);
+                                }
+                              },
+                              secondary: Icon(
+                                // FIX: Changed 'bed_time' to 'block'
+                                isFull ? Icons.block : Icons.bed,
+                                color: isFull ? Colors.red[300] : (isSelected ? Colors.blue[700] : Colors.grey),
+                              ),
+                              activeColor: Colors.blue[700], // Using [] for safety
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
               );
-            }).toList(),
+            },
           );
         },
       ),
@@ -466,9 +645,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                         indicatorSize: TabBarIndicatorSize.label,
                         indicator: BoxDecoration(
                           borderRadius: BorderRadius.circular(10),
-                          color: Colors.blue.shade100,
+                          color: Colors.blue[100], // Using [] for safety
                         ),
-                        labelColor: Colors.blue.shade800,
+                        labelColor: Colors.blue[800], // Using [] for safety
                         unselectedLabelColor: Colors.black54,
                         labelStyle: const TextStyle(fontWeight: FontWeight.bold),
                         onTap: (index) => setState(() => _selectedTabIndex = index),
@@ -583,7 +762,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                 final bool isSchedulingDisabled = hasActive || !patient.isVerified;
 
                 String statusText;
-                // FIX: Define the statusColor explicitly as a MaterialColor
+                // Use MaterialColor for statusColor to allow shade access
                 final MaterialColor statusColor;
 
                 if (!patient.isVerified) {
@@ -625,14 +804,14 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                               horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             // This now correctly uses the MaterialColor property:
-                            color: statusColor.shade100,
+                            color: statusColor[100],
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             statusText,
                             style: TextStyle(
                               // This now correctly uses the MaterialColor property:
-                              color: statusColor.shade900,
+                              color: statusColor[900],
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
                             ),
@@ -651,7 +830,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                                 : () =>
                                 _openBookingForm(context, patientId, patientName, patient.isWalkInToday),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: isSchedulingDisabled ? Colors.grey.shade400 : (patient.isWalkInToday ? Colors.purple.shade600 : Colors.blue.shade600),
+                              backgroundColor: isSchedulingDisabled ? Colors.grey[400] : (patient.isWalkInToday ? Colors.purple[600] : Colors.blue[600]), // Using [] for safety
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8)),
