@@ -521,9 +521,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     onTap: _onTap),
                 const Spacer(),
                 ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.black54),
+                  leading: const Icon(Icons.logout, color: Colors.black),
                   title: const Text("Logout",
-                      style: TextStyle(color: Colors.black54)),
+                      style: TextStyle(color: Colors.black)),
                   onTap: _logout,
                 ),
                 const SizedBox(height: 20),

@@ -471,19 +471,17 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
       String patientName,
       dynamic oldDateData,
       String? oldSlot,
-      String? oldBedId) async {
-
+      String? oldBedId,
+      ) async {
     // Initialize with current values
     _rescheduleDate = oldDateData is Timestamp ? oldDateData.toDate() : DateTime.now();
-    // FIX for Dropdown Error: Trim whitespace from the oldSlot
     _rescheduleSlot = oldSlot?.trim();
-    _selectedBedId = oldBedId; // Start with the old bed ID if it exists
+    _selectedBedId = oldBedId;
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setStateSB) {
-
           return AlertDialog(
             title: Text("Reschedule and Assign Bed for $patientName"),
             content: SizedBox(
@@ -508,8 +506,7 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                         if (newDate != null) {
                           setStateSB(() {
                             _rescheduleDate = newDate;
-                            // If date changes, clear bed to force re-selection/re-check
-                            _selectedBedId = null;
+                            _selectedBedId = null; // reset bed when date changes
                           });
                         }
                       },
@@ -527,7 +524,6 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                       hint: const Text("Select new time slot"),
                       items: _slots.map((String slot) {
                         return DropdownMenuItem<String>(
-                          // Ensure slot value is trimmed for comparison safety
                           value: slot.trim(),
                           child: Text(slot),
                         );
@@ -535,25 +531,27 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                       onChanged: (String? newValue) {
                         setStateSB(() {
                           _rescheduleSlot = newValue;
-                          // If slot changes, clear bed to force re-selection/re-check
-                          _selectedBedId = null;
+                          _selectedBedId = null; // reset bed when slot changes
                         });
                       },
                     ),
+
                     const SizedBox(height: 16),
 
-                    // --- Bed Selection (Conditional on Date/Slot being selected) ---
+                    // --- Bed Selection (only when date & slot are picked) ---
                     if (_rescheduleDate != null && _rescheduleSlot != null) ...[
                       const Divider(height: 24),
                       const Text(
-                          "Optional Bed Assignment (4/Bed Capacity):",
-                          style: TextStyle(fontWeight: FontWeight.bold)
+                        "Optional Bed Assignment (4 per bed):",
+                        style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
 
                       FutureBuilder<Map<String, int>>(
-                        // Use the selected (rescheduled) date and slot for capacity check
-                        future: _fetchBedAssignmentCounts(Timestamp.fromDate(_rescheduleDate!), _rescheduleSlot!),
+                        future: _fetchBedAssignmentCounts(
+                          Timestamp.fromDate(_rescheduleDate!),
+                          _rescheduleSlot!,
+                        ),
                         builder: (context, assignmentSnap) {
                           if (assignmentSnap.connectionState == ConnectionState.waiting) {
                             return const Center(child: LinearProgressIndicator());
@@ -568,7 +566,10 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                                 return const Center(child: CircularProgressIndicator());
                               }
                               if (!bedSnap.hasData || bedSnap.data!.docs.isEmpty) {
-                                return const Text("No beds found.", style: TextStyle(color: Colors.red));
+                                return const Text(
+                                  "No beds found.",
+                                  style: TextStyle(color: Colors.red),
+                                );
                               }
 
                               final beds = bedSnap.data!.docs;
@@ -577,12 +578,9 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                                 children: beds.map((doc) {
                                   final bedId = doc.id;
                                   final bedData = doc.data() as Map<String, dynamic>? ?? {};
-                                  final bedName = bedData['name'] ?? 'Bed ID: $bedId';
+                                  final bedName = bedData['name'] ?? 'Bed $bedId';
 
-                                  // The count from helper is only for *other* approved appointments.
                                   final assignedCount = bedCounts[bedId] ?? 0;
-
-                                  // CAPACITY CHECK
                                   final isFull = assignedCount >= 4;
 
                                   return RadioListTile<String>(
@@ -593,8 +591,9 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
                                     ),
                                     value: bedId,
                                     groupValue: _selectedBedId,
-                                    // Disable if the bed is full and not currently selected
-                                    onChanged: isFull && _selectedBedId != bedId ? null : (value) {
+                                    onChanged: isFull && _selectedBedId != bedId
+                                        ? null
+                                        : (value) {
                                       setStateSB(() {
                                         _selectedBedId = value;
                                       });
@@ -611,24 +610,29 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
 
                     const SizedBox(height: 16),
                     const Text(
-                        "Note: Selecting a bed will set status to 'Approved'. Not selecting a bed will set status to 'Rescheduled'.",
-                        style: TextStyle(color: Colors.blueGrey, fontSize: 12)
+                      "Note: Selecting a bed will set status to 'Approved'.\nNot selecting a bed will set status to 'Rescheduled'.",
+                      style: TextStyle(color: Colors.blueGrey, fontSize: 12),
                     ),
                   ],
                 ),
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text("Cancel"),
+              ),
               ElevatedButton(
                 onPressed: _rescheduleDate != null && _rescheduleSlot != null
                     ? () => Navigator.pop(ctx, true)
-                    : null, // Require date and slot to be selected
+                    : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _selectedBedId != null ? Colors.green : Colors.blue,
                   foregroundColor: Colors.white,
                 ),
-                child: Text(_selectedBedId != null ? "Reschedule & Approve" : "Reschedule Only"),
+                child: Text(
+                  _selectedBedId != null ? "Reschedule & Approve" : "Reschedule Only",
+                ),
               ),
             ],
           );
@@ -649,7 +653,238 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
       );
     }
   }
+  Widget _buildSlotsTab(DateTime selectedDate, List<String> slots,
+      Function(String) onSelect, String? selectedSlot) {
+    // Filters appointments by selectedDate and status 'pending', 'approved', 'rescheduled'
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: FutureBuilder<QuerySnapshot>(
+        future: FirebaseFirestore.instance
+            .collection('appointments')
+            .where(
+          'date',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(
+            DateTime(selectedDate.year, selectedDate.month, selectedDate.day),
+          ),
+        )
+            .where(
+          'date',
+          isLessThan: Timestamp.fromDate(
+            DateTime(selectedDate.year, selectedDate.month, selectedDate.day)
+                .add(const Duration(days: 1)),
+          ),
+        )
+            .where('status', whereIn: ['pending', 'approved', 'rescheduled'])
+            .get(),
+        builder: (context, apptSnap) {
+          if (apptSnap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (!apptSnap.hasData) {
+            return const Center(child: Text("No slot data available."));
+          }
 
+          const int maxSlots = 16; // Maximum slots available per time window
+          Map<String, int> slotCounts = {for (var s in slots) s: 0};
+          for (var doc in apptSnap.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            final bookedSlot =
+            data.containsKey('slot') ? data['slot'] as String : null;
+            if (bookedSlot != null && slotCounts.containsKey(bookedSlot)) {
+              slotCounts[bookedSlot] = slotCounts[bookedSlot]! + 1;
+            }
+          }
+
+          return ListView(
+            children: slots.map((s) {
+              int count = slotCounts[s] ?? 0;
+              bool slotFull = count >= maxSlots;
+              bool isSelected = selectedSlot == s;
+              int available = maxSlots - count;
+
+              // Use MaterialColor constants which have shades defined
+              final MaterialColor color = slotFull
+                  ? Colors.red
+                  : Colors.green;
+
+              String statusText = slotFull ? "FULL" : "AVAILABLE";
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                      // FIX: Use [] accessor for MaterialColor
+                        color: isSelected ? Colors.blue[700]! : color[300]!,
+                        width: isSelected ? 3 : 1
+                    ),
+                  ),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                    leading: Icon(
+                      isSelected ? Icons.check_circle : (slotFull ? Icons.cancel : Icons.check_circle_outline),
+                      color: isSelected ? Colors.blue[700] : color, // Use [] accessor for MaterialColor
+                      size: 30,
+                    ),
+                    title: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    subtitle: Text(
+                      "Booked: $count / $maxSlots | Status: $statusText",
+                      // FIX: Use [] accessor for MaterialColor
+                      style: TextStyle(color: color[700], fontSize: 13),
+                    ),
+                    trailing: ElevatedButton.icon(
+                      icon: const Icon(Icons.arrow_forward_ios, size: 16),
+                      label: Text(isSelected ? "Selected" : "Select"),
+                      onPressed: slotFull ? null : () => onSelect(s),
+                      style: ElevatedButton.styleFrom(
+                        // FIX: Use [] accessor for MaterialColor
+                        backgroundColor: isSelected ? Colors.blue[700] : color[600],
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                    onTap: slotFull ? null : () => onSelect(s),
+                    tileColor: isSelected ? Colors.blue.withOpacity(0.05) : null,
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- Beds Tab (UPDATED to match design and fix errors) ---
+  Widget _buildBedsTab(DateTime selectedDate, String? selectedSlot,
+      Function(String, String) onSelect, String? selectedBedId) {
+
+    if (selectedSlot == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.access_time_filled, color: Colors.red[400], size: 40),
+              const SizedBox(height: 16),
+              const Text(
+                "Slot Selection Required",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Please select a **time slot** first in the 'Slots' tab to accurately check real-time bed availability for that period.",
+                style: TextStyle(color: Colors.grey, fontSize: 15),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: FutureBuilder<Map<String, int>>(
+        // 1. Fetch capacity counts for the specific date/slot
+        future: _fetchBedAssignmentCounts(selectedDate, selectedSlot),
+        builder: (context, assignmentSnap) {
+          if (assignmentSnap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final bedCounts = assignmentSnap.data ?? {};
+          const int maxCapacityPerBed = 4; // Max capacity per bed per slot
+
+          return FutureBuilder<QuerySnapshot>(
+            // 2. Fetch ALL working beds
+            future: FirebaseFirestore.instance
+                .collection('beds')
+                .where('isWorking', isEqualTo: true)
+                .orderBy('name')
+                .get(),
+            builder: (context, bedsSnap) {
+              if (bedsSnap.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (!bedsSnap.hasData || bedsSnap.data!.docs.isEmpty) {
+                return const Center(
+                    child: Text("No working beds are registered in the system."));
+              }
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Date: ${DateFormat('MMM d, yyyy').format(selectedDate)}", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                        Text("Slot: $selectedSlot (Capacity: $maxCapacityPerBed/Bed)", style: TextStyle(color: Colors.grey[700], fontSize: 14)), // Using [] for safety
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      children: bedsSnap.data!.docs.map((bedDoc) {
+                        String bedId = bedDoc.id;
+                        String bedName = (bedDoc.data() as Map<String, dynamic>)['name'] ?? 'Bed ID: $bedId';
+                        final assignedCount = bedCounts[bedId] ?? 0;
+                        final isFull = assignedCount >= maxCapacityPerBed;
+                        final isSelected = selectedBedId == bedId;
+
+                        final MaterialColor color = isFull ? Colors.red : Colors.green;
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8.0),
+                          child: Card(
+                            elevation: 1,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(
+                                  color: isSelected ? Colors.blue[700]! : Colors.transparent, // Using [] for safety
+                                  width: isSelected ? 2 : 1
+                              ),
+                            ),
+                            child: RadioListTile<String>(
+                              title: Text(bedName, style: TextStyle(fontWeight: FontWeight.bold, color: isFull ? Colors.grey : Colors.black87)),
+                              subtitle: Text(
+                                "Assigned: $assignedCount / $maxCapacityPerBed",
+                                // FIX: Use [] accessor for MaterialColor
+                                style: TextStyle(color: color[700], fontSize: 13),
+                              ),
+                              value: bedId,
+                              groupValue: selectedBedId,
+                              onChanged: isFull ? null : (String? value) {
+                                if (value != null) {
+                                  onSelect(value, bedName);
+                                }
+                              },
+                              secondary: Icon(
+                                // FIX: Changed 'bed_time' to 'block'
+                                isFull ? Icons.block : Icons.bed,
+                                color: isFull ? Colors.red[300] : (isSelected ? Colors.blue[700] : Colors.grey),
+                              ),
+                              activeColor: Colors.blue[700], // Using [] for safety
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
 
   Future<void> _confirmAction(BuildContext context, String action, Function onConfirm) async {
     final confirmed = await showDialog<bool>(
