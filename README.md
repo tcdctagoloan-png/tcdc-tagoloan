@@ -1,4 +1,4 @@
-# dialysis_app
+# Dialysis Appointment Scheduling System
 
 A new Flutter project.
 
