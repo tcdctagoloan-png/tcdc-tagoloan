@@ -1,225 +1,311 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'register_page.dart';
+import 'home_page.dart';
 
 class AboutUsPage extends StatelessWidget {
   const AboutUsPage({super.key});
 
-  // Placeholder for a high-quality clinic image
-  final String heroImagePath = 'assets/dialysis_clinic.jpg';
+  final String logoPath =
+  kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png';
 
   @override
   Widget build(BuildContext context) {
-    // Defines the maximum width for the content on large screens
-    final maxWidth = 900.0;
-    final isWideScreen = MediaQuery.of(context).size.width > 900;
+    final isWideScreen = MediaQuery.of(context).size.width >= 900;
 
     return Scaffold(
-      backgroundColor: Colors.grey[50], // Use a light off-white background
-      appBar: AppBar(
-        title: const Text("About Total Care Dialysis Center"),
-        backgroundColor: Colors.green.shade700,
-        foregroundColor: Colors.white,
-        elevation: 6, // Slightly elevated AppBar
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // --- 1. Hero Image Section (Brighter Overlay) ---
-            Container(
-              height: MediaQuery.of(context).size.width * 0.35, // Responsive height
-              constraints: const BoxConstraints(maxHeight: 350, minHeight: 200),
-              width: double.infinity,
-              decoration: BoxDecoration(
-                image: DecorationImage(
-                  // NOTE: Please add a suitable image at 'assets/dialysis_clinic.jpg'
-                  image: AssetImage(heroImagePath),
-                  fit: BoxFit.cover,
-                  // Added error handling for image asset
-                  onError: (exception, stackTrace) => const Image(
-                    image: AssetImage('assets/placeholder.jpg'), // Placeholder fallback
-                    fit: BoxFit.cover,
-                  ),
+      backgroundColor: Colors.grey[50],
+      body: Column(
+        children: [
+          // ✅ Top Navigation Bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            color: Colors.green.shade100,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Image.asset(
+                      logoPath,
+                      height: 45,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Icon(Icons.local_hospital_outlined,
+                            size: 28, color: Colors.green);
+                      },
+                    ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      "TOTAL CARE DIALYSIS CENTER",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              child: Container(
-                color: Colors.black.withOpacity(0.35), // Lighter overlay
-                alignment: Alignment.center,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                  child: Text(
-                    "Compassionate Care, Advanced Technology",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: MediaQuery.of(context).size.width > 600 ? 48 : 32,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                      shadows: [
-                        Shadow(
-                          blurRadius: 8,
-                          color: Colors.black.withOpacity(0.6),
-                          offset: const Offset(1, 1),
+                Row(
+                  children: [
+                    _NavItem(
+                        label: "Home",
+                        onTap: () => Navigator.pushReplacementNamed(
+                            context, '/home')),
+                    _NavItem(
+                        label: "Login",
+                        onTap: () =>
+                            Navigator.pushReplacementNamed(context, '/login')),
+                    _NavItem(
+                        label: "Register",
+                        onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const RegisterPage()))),
+                    _NavItem(
+                        label: "About",
+                        onTap: () => Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const AboutUsPage()))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // ✅ Main Content
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  // ✅ Hero Section
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 60, horizontal: 24),
+                    color: Colors.green.shade50,
+                    child: Column(
+                      children: [
+                        Text(
+                          "About Us",
+                          style: TextStyle(
+                            fontSize: isWideScreen ? 42 : 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          "Providing compassionate dialysis care with modern technology and trusted expertise.",
+                          style: TextStyle(fontSize: 18, color: Colors.black87),
+                          textAlign: TextAlign.center,
                         ),
                       ],
                     ),
                   ),
-                ),
+
+                  // ✅ Who We Are
+                  Padding(
+                    padding: const EdgeInsets.all(32.0),
+                    child: Column(
+                      children: const [
+                        Text(
+                          "Who We Are",
+                          style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87),
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          "Total Care Dialysis Center is dedicated to serving patients with high-quality dialysis treatment in a safe and comfortable environment. "
+                              "We aim to reduce the burden of kidney disease by providing efficient scheduling, reliable technology, and patient-focused healthcare services.",
+                          style: TextStyle(fontSize: 18, color: Colors.black54),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ✅ Mission & Vision
+                  Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.all(32),
+                    child: Wrap(
+                      spacing: 40,
+                      runSpacing: 20,
+                      alignment: WrapAlignment.center,
+                      children: const [
+                        _InfoCard(
+                          icon: Icons.flag,
+                          title: "Our Mission",
+                          description:
+                          "To provide seamless, accessible, and compassionate dialysis care through modern healthcare solutions.",
+                        ),
+                        _InfoCard(
+                          icon: Icons.visibility,
+                          title: "Our Vision",
+                          description:
+                          "To be the leading dialysis center known for innovation, trust, and excellence in patient care.",
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ✅ Services
+                  Padding(
+                    padding: const EdgeInsets.all(32.0),
+                    child: Column(
+                      children: const [
+                        Text(
+                          "Our Services",
+                          style: TextStyle(
+                              fontSize: 28, fontWeight: FontWeight.bold),
+                        ),
+                        SizedBox(height: 24),
+                        _FeatureCard(
+                          icon: Icons.event_available,
+                          title: "Easy Scheduling",
+                          description:
+                          "Book your dialysis appointments online with real-time availability.",
+                        ),
+                        _FeatureCard(
+                          icon: Icons.local_hospital,
+                          title: "Modern Facility",
+                          description:
+                          "State-of-the-art equipment and comfortable treatment areas.",
+                        ),
+                        _FeatureCard(
+                          icon: Icons.people,
+                          title: "Expert Team",
+                          description:
+                          "Highly trained staff focused on your health and well-being.",
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ✅ Footer
+                  Container(
+                    width: double.infinity,
+                    color: Colors.green.shade100,
+                    padding: const EdgeInsets.all(16),
+                    child: const Center(
+                      child: Text(
+                        "© 2025 Total Care Dialysis Center | All Rights Reserved",
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-
-            // --- 2. Content Container with Max Width and Centering ---
-            Center(
-              child: Container(
-                constraints: BoxConstraints(maxWidth: maxWidth),
-                padding: const EdgeInsets.all(40.0), // Increased padding
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Mission Section
-                    _buildMissionVisionCard(
-                      context,
-                      "Our Mission",
-                      "To provide comprehensive, high-quality renal replacement therapy with a focus on patient safety, comfort, and personalized care, ensuring the best possible quality of life for those with kidney disease.",
-                      Colors.green.shade50,
-                    ),
-                    const SizedBox(height: 32),
-
-                    // Vision Section
-                    _buildMissionVisionCard(
-                      context,
-                      "Our Vision",
-                      "To be the leading dialysis center in the region, recognized for clinical excellence, compassionate staff, and continuous improvement in patient outcomes.",
-                      Colors.white,
-                    ),
-                    const SizedBox(height: 40),
-
-                    // Why Choose Us Section (Featured List)
-                    _buildSectionHeader("Why Choose Us?"),
-                    const SizedBox(height: 32),
-
-                    // FIXED: Replaced GridView.count with a responsive Row/Column layout
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        return (constraints.maxWidth > 600)
-                            ? Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildFeatureCard(Icons.verified_user, "Certified Professionals", "Our team consists of highly-trained nephrologists, nurses, and technicians dedicated to your well-being.")),
-                            const SizedBox(width: 20),
-                            Expanded(child: _buildFeatureCard(Icons.star_half, "State-of-the-Art Equipment", "We use the latest dialysis machines and purification systems for optimal treatment efficacy.")),
-                            const SizedBox(width: 20),
-                            Expanded(child: _buildFeatureCard(Icons.favorite_border, "Patient-Centered Approach", "Your comfort and individual needs are our top priority in creating a calming and supportive environment.")),
-                          ],
-                        )
-                            : Column(
-                          children: [
-                            _buildFeatureCard(Icons.verified_user, "Certified Professionals", "Our team consists of highly-trained nephrologists, nurses, and technicians dedicated to your well-being."),
-                            const SizedBox(height: 20),
-                            _buildFeatureCard(Icons.star_half, "State-of-the-Art Equipment", "We use the latest dialysis machines and purification systems for optimal treatment efficacy."),
-                            const SizedBox(height: 20),
-                            _buildFeatureCard(Icons.favorite_border, "Patient-Centered Approach", "Your comfort and individual needs are our top priority in creating a calming and supportive environment."),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Footer spacing
-            const SizedBox(height: 60),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  // Helper Widget for Section Headers
-  Widget _buildSectionHeader(String title) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 32,
-            fontWeight: FontWeight.w800,
-            color: Colors.green.shade800,
+// ✅ Reusable Nav Item
+class _NavItem extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _NavItem({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color: Colors.black87,
           ),
         ),
-        Container(
-          margin: const EdgeInsets.only(top: 8),
-          height: 4,
-          width: 100,
-          color: Colors.green.shade400,
-        ),
-      ],
+      ),
     );
   }
+}
 
-  // Helper Widget for Mission/Vision sections (now in a Card)
-  Widget _buildMissionVisionCard(BuildContext context, String title, String content, Color backgroundColor) {
+// ✅ Reusable Info Card
+class _InfoCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+
+  const _InfoCard(
+      {required this.icon, required this.title, required this.description});
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
-      color: backgroundColor,
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(32.0),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.all(24),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Icon(icon, size: 40, color: Colors.green),
+            const SizedBox(height: 16),
+            Text(title,
+                style: const TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
             Text(
-              title,
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.green.shade700,
-              ),
-            ),
-            const Divider(height: 30, color: Colors.grey),
-            Text(
-              content,
-              style: const TextStyle(fontSize: 17, height: 1.6, color: Colors.black87),
+              description,
+              style: const TextStyle(fontSize: 16, color: Colors.black54),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  // Helper Widget for Feature Cards
-  Widget _buildFeatureCard(IconData icon, String title, String subtitle) {
+// ✅ Reusable Feature Card
+class _FeatureCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String description;
+
+  const _FeatureCard(
+      {required this.icon, required this.title, required this.description});
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
-      elevation: 6,
+      elevation: 4,
+      shadowColor: Colors.black26,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
+      child: Container(
+        width: 280,
+        padding: const EdgeInsets.all(24),
+        margin: const EdgeInsets.symmetric(vertical: 12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          // Added Expanded widgets here to allow the column to use the available height
           children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.green.shade100,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, size: 32, color: Colors.green.shade700),
-            ),
+            Icon(icon, size: 48, color: Colors.green),
             const SizedBox(height: 16),
             Text(
               title,
               style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
-              ),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
-            // Use Expanded or flexible spacing if needed, but the Row/Column fix should solve the overflow.
             Text(
-              subtitle,
+              description,
               style: const TextStyle(fontSize: 16, color: Colors.black54),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
