@@ -3,8 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart'; // For RawKeyboardListener
 
-// Import dashboards
+// Dashboards
 import '../patient/patient_dashboard.dart';
 import '../nurse/nurse_dashboard.dart';
 import '../admin/admin_dashboard.dart';
@@ -26,7 +27,6 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscurePassword = true;
   bool _rememberMe = false;
 
-  // Standard asset path using conditional logic for web/non-web environments
   final String logoPath =
   kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png';
 
@@ -89,33 +89,15 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
 
-      if (role == "patient") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => PatientDashboard(userId: uid)),
-        );
-        if (!verified) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                "Pass all requirements to the admin to be verified before booking appointments!",
-              ),
-            ),
-          );
-        }
-      } else if (role == "nurse") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => NurseDashboard(nurseId: uid)),
-        );
-      } else if (role == "admin") {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => AdminDashboard(userId: uid)),
-        );
-      } else {
+      Navigator.pushReplacementNamed(context, '/');
+
+      if (!verified && role == "patient") {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Unknown role: $role")),
+          const SnackBar(
+            content: Text(
+              "Pass all requirements to the admin to be verified before booking appointments!",
+            ),
+          ),
         );
       }
     } on FirebaseAuthException catch (e) {
@@ -149,7 +131,6 @@ class _LoginPageState extends State<LoginPage> {
       backgroundColor: Colors.grey[100],
       body: Column(
         children: [
-          // Top navigation bar (only for web)
           if (isWideScreen)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -157,21 +138,20 @@ class _LoginPageState extends State<LoginPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Logo and Title Section
                   Row(
                     children: [
                       Image.asset(
                         logoPath,
-                        height: 50, // Reduced height for better fit in navigation bar
+                        height: 50,
                         errorBuilder: (context, error, stackTrace) {
                           return const Padding(
                             padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.broken_image,
-                                size: 30, color: Colors.red),
+                            child:
+                            Icon(Icons.broken_image, size: 30, color: Colors.red),
                           );
                         },
                       ),
-                      const SizedBox(width: 12), // Added spacing
+                      const SizedBox(width: 12),
                       const Text(
                         "TOTAL CARE DIALYSIS CENTER",
                         style: TextStyle(
@@ -182,13 +162,12 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ],
                   ),
-                  // Navigation Links
                   Row(
                     children: [
-                      _NavItem(label: "Home",
-                      onTap: () =>
-                          Navigator.pushReplacementNamed(context, '/home')
-                      ),
+                      _NavItem(
+                          label: "Home",
+                          onTap: () =>
+                              Navigator.pushReplacementNamed(context, '/home')),
                       _NavItem(label: "Login", onTap: () {}),
                       _NavItem(
                         label: "Register",
@@ -199,15 +178,15 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                       ),
-                      _NavItem(label: "About", onTap: ()=>
-                      Navigator.pushReplacementNamed (context, '/about')),
+                      _NavItem(
+                          label: "About",
+                          onTap: () =>
+                              Navigator.pushReplacementNamed(context, '/about')),
                     ],
                   )
                 ],
               ),
             ),
-
-          // Main content
           Expanded(
             child: Center(
               child: SingleChildScrollView(
@@ -223,16 +202,13 @@ class _LoginPageState extends State<LoginPage> {
                     height: 500,
                     child: Row(
                       children: [
-                        // Left Panel (Welcome Message and Logo)
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Logo added to the left panel for wide screens
                                 Image.asset(
                                   logoPath,
                                   height: 100,
@@ -266,15 +242,19 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                           ),
                         ),
-                        Container(
-                          width: 1,
-                          color: Colors.grey.shade300,
-                        ),
-                        // Right Panel (Login Form)
+                        Container(width: 1, color: Colors.grey.shade300),
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
-                            child: _buildLoginForm(),
+                            child: RawKeyboardListener(
+                              focusNode: FocusNode(),
+                              onKey: (event) {
+                                if (event.isKeyPressed(LogicalKeyboardKey.enter)) {
+                                  _login();
+                                }
+                              },
+                              child: _buildLoginForm(),
+                            ),
                           ),
                         ),
                       ],
@@ -286,7 +266,6 @@ class _LoginPageState extends State<LoginPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // Logo added for narrow/mobile screens
                       Image.asset(
                         logoPath,
                         height: 100,
@@ -317,7 +296,15 @@ class _LoginPageState extends State<LoginPage> {
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 24),
-                      _buildLoginForm(),
+                      RawKeyboardListener(
+                        focusNode: FocusNode(),
+                        onKey: (event) {
+                          if (event.isKeyPressed(LogicalKeyboardKey.enter)) {
+                            _login();
+                          }
+                        },
+                        child: _buildLoginForm(),
+                      ),
                     ],
                   ),
                 ),

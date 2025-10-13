@@ -27,7 +27,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
   bool _loadingName = true;
   late final List<Widget> _pages;
   late final String _patientId;
-  int _unreadNotifications = 0;
+  int _unreadNotifications = 0; // State variable to hold the unread count
 
   // State for Base64 image to display in the sidebar
   String? _profileImageBase64;
@@ -59,9 +59,11 @@ class _PatientDashboardState extends State<PatientDashboard> {
     ];
 
     _loadUsername();
+    // Start listening for unread notifications immediately
     _listenUnreadNotifications();
   }
 
+  /// Fetches the user's name, verification status, and profile image from Firestore.
   Future<void> _loadUsername() async {
     bool isVerified = false;
     String name = '';
@@ -91,7 +93,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
           _loadingName = false;
           _pages[0] = HomePage(username: _username);
 
-          // Conditionally update the Book page
+          // Conditionally update the Book page based on verification status
           _pages[2] = isVerified
               ? SafeArea(child: booking.BookPage(userId: _patientId))
               : const Center(
@@ -110,10 +112,13 @@ class _PatientDashboardState extends State<PatientDashboard> {
     }
   }
 
+  /// Sets up a real-time listener to count unread notifications for the current patient.
   void _listenUnreadNotifications() {
     FirebaseFirestore.instance
         .collection('notifications')
+    // Filter: Only notifications targeted at this patient
         .where('patientId', isEqualTo: _patientId)
+    // Filter: Only notifications that have not been read
         .where('read', isEqualTo: false)
         .snapshots()
         .listen((snapshot) {
@@ -141,24 +146,31 @@ class _PatientDashboardState extends State<PatientDashboard> {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
 
     if (!isWideScreen) {
-      // Mobile version (BottomNavigationBar fixes applied here)
+      // Mobile version
       return Scaffold(
         backgroundColor: Colors.grey[100],
-        body: Column(
-          children: [
-            Expanded(
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.white, Colors.lightGreen],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: _pages[_index],
-              ),
+        appBar: AppBar(
+          title: Text(_titles[_index]),
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+          elevation: 4,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Logout',
+              onPressed: _logout,
             ),
           ],
+        ),
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.white, Colors.lightGreen],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: _pages[_index],
         ),
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _index,
@@ -168,12 +180,10 @@ class _PatientDashboardState extends State<PatientDashboard> {
           unselectedItemColor: Colors.grey,
           items: [
             const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-            // FIX: Wrapped Icons.calendar_today with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: "Appointments"),
-            // FIX: Wrapped Icons.add_circle_outline with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), label: "Book"),
-            // FIX: Wrapped Icons.person with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+            // Notification Item with Badge
             BottomNavigationBarItem(
               icon: Stack(
                 clipBehavior: Clip.none,
@@ -213,7 +223,6 @@ class _PatientDashboardState extends State<PatientDashboard> {
               ),
               label: "Notifications",
             ),
-            // FIX: Wrapped Icons.bar_chart with Icon() widget
             const BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: "History"),
           ],
         ),
@@ -283,12 +292,20 @@ class _PatientDashboardState extends State<PatientDashboard> {
                 _WebNavItem(icon: Icons.calendar_today_outlined, label: "Appointments", index: 1, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.add_box_outlined, label: "Book", index: 2, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.person_outline, label: "Profile", index: 3, currentIndex: _index, onTap: _onTap),
-                _WebNavItem(icon: Icons.notifications_none, label: "Notifications", index: 4, currentIndex: _index, onTap: _onTap, badgeCount: _unreadNotifications),
+                // Notification Item with Badge
+                _WebNavItem(
+                    icon: Icons.notifications_none,
+                    label: "Notifications",
+                    index: 4,
+                    currentIndex: _index,
+                    onTap: _onTap,
+                    badgeCount: _unreadNotifications // Pass the unread count here
+                ),
                 _WebNavItem(icon: Icons.bar_chart_outlined, label: "History", index: 5, currentIndex: _index, onTap: _onTap),
                 const Spacer(),
                 ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.redAccent),
-                  title: const Text("Logout", style: TextStyle(color: Colors.redAccent)),
+                  leading: const Icon(Icons.logout, color: Colors.red),
+                  title: const Text("Logout", style: TextStyle(color: Colors.red)),
                   onTap: _logout,
                 ),
               ],
@@ -436,7 +453,7 @@ class _WebNavItem extends StatelessWidget {
   final int index;
   final int currentIndex;
   final void Function(int) onTap;
-  final int badgeCount;
+  final int badgeCount; // Accepts the unread count
 
   const _WebNavItem({
     required this.icon,
@@ -455,6 +472,7 @@ class _WebNavItem extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           Icon(icon, color: isSelected ? Colors.green : Colors.black54),
+          // Conditionally display the badge if there are unread notifications AND it's the notification tab (index 4)
           if (badgeCount > 0 && index == 4)
             Positioned(
               right: -4,
@@ -463,6 +481,7 @@ class _WebNavItem extends StatelessWidget {
                 padding: const EdgeInsets.all(4),
                 decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
                 child: Text(
+                  // Display the count
                   '$badgeCount',
                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                 ),
