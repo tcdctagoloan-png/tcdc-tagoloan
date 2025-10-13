@@ -304,8 +304,8 @@ class _PatientDashboardState extends State<PatientDashboard> {
                 _WebNavItem(icon: Icons.bar_chart_outlined, label: "History", index: 5, currentIndex: _index, onTap: _onTap),
                 const Spacer(),
                 ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.red),
-                  title: const Text("Logout", style: TextStyle(color: Colors.red)),
+                  leading: const Icon(Icons.logout, color: Colors.black),
+                  title: const Text("Logout", style: TextStyle(color: Colors.black)),
                   onTap: _logout,
                 ),
               ],
