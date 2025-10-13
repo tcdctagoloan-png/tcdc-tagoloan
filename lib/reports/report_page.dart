@@ -1,5 +1,8 @@
 // lib/reports/report_page.dart
+<<<<<<< HEAD
 import 'dart:typed_data';
+=======
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -7,7 +10,11 @@ import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 
 class ReportsPage extends StatefulWidget {
+<<<<<<< HEAD
   final String? role; // "admin", "nurse", "patient"
+=======
+  final String? role; // "admin" or "patient"
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
   final String? userId;
 
   const ReportsPage({super.key, this.role = "admin", this.userId});
@@ -30,13 +37,22 @@ class _ReportsPageState extends State<ReportsPage> {
 
     final adminReports = <String>[
       "Daily Appointment Schedule",
+<<<<<<< HEAD
       "Nurse Workload Summary",
       "Dialysis Machine Utilization",
+=======
+      "Appointment History of Patient",
+      "Nurse Workload Summary",
+      "Dialysis Machine Utilization",
+      "Notifications per Patient",
+      "Upcoming Appointments per Patient",
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
       "Appointment Count by Status",
       "Patient Contact Information",
       "Machine Allocation Log",
     ];
 
+<<<<<<< HEAD
     final nurseReports = <String>[
       "Daily Appointment Schedule",
       "Appointment Count by Status",
@@ -44,11 +60,14 @@ class _ReportsPageState extends State<ReportsPage> {
       "Dialysis Machine Utilization",
     ];
 
+=======
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
     final patientReports = <String>[
       "Appointment History of Patient",
       "Upcoming Appointments per Patient",
       "Notifications per Patient",
       "Machine Allocation Log",
+<<<<<<< HEAD
     ];
 
     if (widget.role == "patient") {
@@ -59,6 +78,12 @@ class _ReportsPageState extends State<ReportsPage> {
       _reportTypes = adminReports;
     }
 
+=======
+      "Appointment Count by Status",
+    ];
+
+    _reportTypes = (widget.role == "patient") ? patientReports : adminReports;
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
     _selectedReport = _reportTypes.first;
 
     _searchController.addListener(() {
@@ -70,6 +95,7 @@ class _ReportsPageState extends State<ReportsPage> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+<<<<<<< HEAD
   }
 
   String _formatDate(DateTime date) {
@@ -107,6 +133,8 @@ class _ReportsPageState extends State<ReportsPage> {
     } catch (_) {
       return 'N/A';
     }
+=======
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
   }
 
   @override
@@ -122,7 +150,11 @@ class _ReportsPageState extends State<ReportsPage> {
       ),
       body: Center(
         child: ConstrainedBox(
+<<<<<<< HEAD
           constraints: const BoxConstraints(maxWidth: 1400),
+=======
+          constraints: const BoxConstraints(maxWidth: 1200),
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -196,8 +228,15 @@ class _ReportsPageState extends State<ReportsPage> {
                 children: [
                   const Icon(Icons.calendar_today, size: 18),
                   const SizedBox(width: 8),
+<<<<<<< HEAD
                   Text(_formatDate(_selectedDate),
                       style: const TextStyle(fontWeight: FontWeight.w500)),
+=======
+                  Text(
+                    "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}",
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
                 ],
               ),
             ),
@@ -208,7 +247,11 @@ class _ReportsPageState extends State<ReportsPage> {
           elevation: 2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           child: IconButton(
+<<<<<<< HEAD
             tooltip: "Export PDF / Preview",
+=======
+            tooltip: "Export PDF",
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
             icon: const Icon(Icons.picture_as_pdf, color: Colors.green, size: 26),
             onPressed: _onPrintPressed,
           ),
@@ -249,10 +292,27 @@ class _ReportsPageState extends State<ReportsPage> {
     required List<String> columns,
     required List<List<String>> rows,
   }) {
+<<<<<<< HEAD
+=======
+    if (rows.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87)),
+          const SizedBox(height: 8),
+          const Text("No data available.", style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 24),
+        ],
+      );
+    }
+
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(title,
+<<<<<<< HEAD
             style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87)),
         const SizedBox(height: 12),
         LayoutBuilder(builder: (context, constraints) {
@@ -557,9 +617,72 @@ class _ReportsPageState extends State<ReportsPage> {
           ),
         );
       },
+=======
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.black87)),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.grey.shade300),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 3, offset: const Offset(0, 1)),
+            ],
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              dataRowHeight: 48,
+              headingRowHeight: 48,
+              horizontalMargin: 20,
+              columnSpacing: 36,
+              headingRowColor: MaterialStateProperty.all(Colors.grey.shade100),
+              border: TableBorder.symmetric(
+                inside: BorderSide(color: Colors.grey.shade300, width: 0.5),
+                outside: BorderSide(color: Colors.grey.shade400, width: 0.8),
+              ),
+              columns: columns
+                  .map((col) => DataColumn(
+                label: Text(col,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 14)),
+              ))
+                  .toList(),
+              rows: List.generate(rows.length, (index) {
+                final row = rows[index];
+                final isEven = index % 2 == 0;
+                return DataRow(
+                  color: MaterialStateProperty.all(isEven ? Colors.grey.shade50 : Colors.white),
+                  cells: row
+                      .map((cell) => DataCell(Text(cell, style: const TextStyle(fontSize: 13, color: Colors.black87))))
+                      .toList(),
+                );
+              }),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
     );
   }
 
+  // ====== PDF / Print Logic ======
+  Future<void> _onPrintPressed() async {
+    final pdf = pw.Document();
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4.landscape,
+        build: (context) => pw.Center(
+          child: pw.Text("PDF for $_selectedReport is not fully implemented"),
+        ),
+      ),
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
+    );
+
+    await Printing.layoutPdf(onLayout: (format) => pdf.save());
+  }
+
+<<<<<<< HEAD
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
     final pdf = pw.Document();
     final generatedOn = _formatDate(DateTime.now());
@@ -736,6 +859,243 @@ class _ReportsPageState extends State<ReportsPage> {
           ),
         ],
       ),
+=======
+  // ====== Report Widgets with Live Data ======
+
+  Widget _dailyAppointmentSchedule() {
+    final start = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    final end = start.add(const Duration(days: 1));
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('appointments')
+          .where('date', isGreaterThanOrEqualTo: start)
+          .where('date', isLessThan: end)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['bedName'] ?? 'N/A',
+            d['patientId'] ?? 'N/A',
+            d['nurseId'] ?? 'N/A',
+            d['slot'] ?? 'N/A',
+            d['status'] ?? 'N/A',
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Daily Appointment Schedule",
+          columns: ["Bed Name", "Patient ID", "Nurse ID", "Slot", "Status"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _appointmentHistoryOfPatient() {
+    if (widget.userId == null) return const SizedBox();
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('appointments')
+          .where('patientId', isEqualTo: widget.userId)
+          .orderBy('date', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['bedName'] ?? 'N/A',
+            d['slot'] ?? 'N/A',
+            d['status'] ?? 'N/A',
+            (d['date'] as Timestamp).toDate().toString().split(' ')[0],
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Appointment History",
+          columns: ["Bed", "Slot", "Status", "Date"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _nurseWorkloadSummary() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('appointments').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final docs = snapshot.data!.docs;
+        final Map<String, int> counts = {};
+        for (var doc in docs) {
+          final d = doc.data() as Map<String, dynamic>;
+          final nurseId = d['nurseId'] ?? 'N/A';
+          counts[nurseId] = (counts[nurseId] ?? 0) + 1;
+        }
+        final data = counts.entries.map((e) => [e.key, e.value.toString()]).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Nurse Workload Summary",
+          columns: ["Nurse ID", "Appointment Count"],
+          rows: data,
+        );
+      },
+    );
+  }
+
+  Widget _dialysisMachineUtilization() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('beds').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['name'] ?? 'N/A',
+            d['isWorking'] == true ? 'Yes' : 'No',
+            ((d['assignedPatients'] ?? []).length).toString(),
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Dialysis Machine Utilization",
+          columns: ["Bed Name", "Is Working", "Assigned Patients"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _notificationsPerPatient() {
+    if (widget.userId == null) return const SizedBox();
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('notifications')
+          .where('userId', isEqualTo: widget.userId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['title'] ?? 'N/A',
+            d['message'] ?? 'N/A',
+            d['isRead'] == true ? 'Read' : 'Unread',
+            (d['createdAt'] as Timestamp).toDate().toString().split(' ')[0],
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Notifications",
+          columns: ["Title", "Message", "Status", "Date"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _upcomingAppointmentsPerPatient() {
+    if (widget.userId == null) return const SizedBox();
+    final now = DateTime.now();
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('appointments')
+          .where('patientId', isEqualTo: widget.userId)
+          .where('date', isGreaterThanOrEqualTo: now)
+          .orderBy('date')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['bedName'] ?? 'N/A',
+            d['slot'] ?? 'N/A',
+            d['status'] ?? 'N/A',
+            (d['date'] as Timestamp).toDate().toString().split(' ')[0],
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Upcoming Appointments",
+          columns: ["Bed", "Slot", "Status", "Date"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _appointmentCountByStatus() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('appointments').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final docs = snapshot.data!.docs;
+        final Map<String, int> counts = {};
+        for (var doc in docs) {
+          final d = doc.data() as Map<String, dynamic>;
+          final status = d['status'] ?? 'N/A';
+          counts[status] = (counts[status] ?? 0) + 1;
+        }
+        final data = counts.entries.map((e) => [e.key, e.value.toString()]).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Appointment Count by Status",
+          columns: ["Status", "Count"],
+          rows: data,
+        );
+      },
+    );
+  }
+
+  Widget _patientContactInformation() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').where('role', isEqualTo: 'patient').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['fullName'] ?? 'N/A',
+            d['username'] ?? 'N/A',
+            d['email'] ?? 'N/A',
+            d['contactNumber'] ?? 'N/A',
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Patient Contact Information",
+          columns: ["Full Name", "Username", "Email", "Contact"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+    );
+  }
+
+  Widget _machineAllocationLog() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('beds').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final data = snapshot.data!.docs.map((doc) {
+          final d = doc.data() as Map<String, dynamic>;
+          return [
+            d['name'] ?? 'N/A',
+            ((d['assignedPatients'] ?? []) as List).join(', '),
+            d['isWorking'] == true ? 'Yes' : 'No',
+          ];
+        }).where((row) => row.any((cell) => cell.toLowerCase().contains(_searchQuery))).toList();
+
+        return _buildDataTable(
+          title: "Machine Allocation Log",
+          columns: ["Bed Name", "Assigned Patients", "Is Working"],
+          rows: data.cast<List<String>>(),
+        );
+      },
+>>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
     );
 
     return pdf.save();
