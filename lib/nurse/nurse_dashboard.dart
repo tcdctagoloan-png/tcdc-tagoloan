@@ -532,7 +532,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
                           DataColumn(label: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
                           DataColumn(label: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
                           DataColumn(label: Text('Contact Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Total Appts', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
+                          DataColumn(label: Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
                         ],
                         rows: rows,
                       ),
@@ -570,7 +570,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
                   DataColumn(label: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
                   DataColumn(label: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
                   DataColumn(label: Text('Contact Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('Total Appts', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
+                  DataColumn(label: Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
                 ],
                 rows: const [
                   DataRow(cells: [
