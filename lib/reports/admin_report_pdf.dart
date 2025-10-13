@@ -58,17 +58,17 @@ class _ReportsPageState extends State<ReportsPage> {
         title: const Text("Reports"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.picture_as_pdf),
+            icon: const Icon(Icons.print),
             onPressed: () async {
               switch (_currentTab) {
                 case 0:
-                  await _previewReport("Beds", _buildBedsPdf);
+                  await _printBedsReport();
                   break;
                 case 1:
-                  await _previewReport("Appointments", _buildAppointmentsPdf);
+                  await _printAppointmentsReport();
                   break;
                 case 2:
-                  await _previewReport("Patients", _buildPatientsPdf);
+                  await _printPatientsReport();
                   break;
               }
             },
@@ -83,14 +83,8 @@ class _ReportsPageState extends State<ReportsPage> {
               children: [
                 const Text("Selected Date: ", style: TextStyle(fontWeight: FontWeight.w500)),
                 TextButton(
-<<<<<<< HEAD
                   child: Text(_formatDate(_selectedDate),
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-=======
-                  child: Text(
-                    "${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}",
-                  ),
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
                   onPressed: () async {
                     final date = await showDatePicker(
                       context: context,
@@ -98,13 +92,7 @@ class _ReportsPageState extends State<ReportsPage> {
                       firstDate: DateTime(2020),
                       lastDate: DateTime(2100),
                     );
-<<<<<<< HEAD
                     if (date != null) setState(() => _selectedDate = date);
-=======
-                    if (date != null) {
-                      setState(() => _selectedDate = date);
-                    }
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
                   },
                 ),
               ],
@@ -141,30 +129,6 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-  // -------------------------- PDF PREVIEW --------------------------
-  Future<void> _previewReport(
-      String title, Future<pw.Document> Function() buildPdf) async {
-    final pdf = await buildPdf();
-
-    // Opens PDF preview in a new full-screen dialog
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => Scaffold(
-          appBar: AppBar(title: Text("$title Report Preview")),
-          body: PdfPreview(
-            build: (format) async => pdf.save(),
-            allowPrinting: true,
-            allowSharing: true,
-            canChangeOrientation: false,
-            canChangePageFormat: false,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // -------------------------- FIRESTORE TABS --------------------------
   Widget _bedsTab() {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('beds').snapshots(),
@@ -194,18 +158,10 @@ class _ReportsPageState extends State<ReportsPage> {
                     title: Text(bedData['name'] ?? 'Unknown Bed', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     subtitle: Text("Assigned Appointments for ${_formatDate(_selectedDate)}: $assignedCount"),
                     trailing: Text(
-<<<<<<< HEAD
                       bedData['isWorking'] == true ? "🟢 Working" : "🔴 Not Working",
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         color: bedData['isWorking'] == true ? Colors.green : Colors.red,
-=======
-                      bedData['isWorking'] == true ? "Working" : "Not Working",
-                      style: TextStyle(
-                        color: bedData['isWorking'] == true
-                            ? Colors.green
-                            : Colors.red,
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
                       ),
                     ),
                   ),
@@ -223,10 +179,7 @@ class _ReportsPageState extends State<ReportsPage> {
       stream: FirebaseFirestore.instance
           .collection('appointments')
           .where('date', isEqualTo: Timestamp.fromDate(_selectedDate))
-<<<<<<< HEAD
           .orderBy('slot')
-=======
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
@@ -236,7 +189,6 @@ class _ReportsPageState extends State<ReportsPage> {
           itemCount: appointments.length,
           itemBuilder: (context, index) {
             final app = appointments[index].data() as Map<String, dynamic>;
-<<<<<<< HEAD
             final patientId = app['patientId'] as String?;
             final bedId = app['bedId'] as String?;
             return FutureBuilder<List<String>>(
@@ -258,14 +210,6 @@ class _ReportsPageState extends State<ReportsPage> {
                   ),
                 );
               },
-=======
-            return Card(
-              child: ListTile(
-                title: Text("Patient ID: ${app['patientId'] ?? ''}"),
-                subtitle: Text(
-                    "Slot: ${app['slot'] ?? ''}, Bed: ${app['bedId'] ?? 'Unassigned'}, Status: ${app['status'] ?? ''}"),
-              ),
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
             );
           },
         );
@@ -302,14 +246,9 @@ class _ReportsPageState extends State<ReportsPage> {
     );
   }
 
-<<<<<<< HEAD
   // ================= PDF PRINT FUNCTIONS =================
 
   Future<void> _printBedsReport() async {
-=======
-  // -------------------------- PDF GENERATORS --------------------------
-  Future<pw.Document> _buildBedsPdf() async {
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
     final pdf = pw.Document();
     final bedsSnap = await FirebaseFirestore.instance.collection('beds').get();
     final bedsData = <List<String>>[];
@@ -328,7 +267,6 @@ class _ReportsPageState extends State<ReportsPage> {
       ]);
     }
 
-<<<<<<< HEAD
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       build: (context) => [
@@ -347,28 +285,11 @@ class _ReportsPageState extends State<ReportsPage> {
         ),
       ],
     ));
-=======
-    pdf.addPage(
-      pw.MultiPage(
-        build: (context) => [
-          pw.Text(
-            "Beds Report - ${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}",
-            style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
-          ),
-          pw.SizedBox(height: 10),
-          pw.TableHelper.fromTextArray(
-            headers: ['Bed Name', 'Assigned Patients', 'Status'],
-            data: bedsData,
-          ),
-        ],
-      ),
-    );
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
 
-    return pdf;
+    await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
-  Future<pw.Document> _buildAppointmentsPdf() async {
+  Future<void> _printAppointmentsReport() async {
     final pdf = pw.Document();
     final appsSnap = await FirebaseFirestore.instance
         .collection('appointments')
@@ -388,7 +309,6 @@ class _ReportsPageState extends State<ReportsPage> {
       ];
     }).toList();
 
-<<<<<<< HEAD
     final data = await Future.wait(futures);
 
     pdf.addPage(pw.MultiPage(
@@ -409,28 +329,11 @@ class _ReportsPageState extends State<ReportsPage> {
         ),
       ],
     ));
-=======
-    pdf.addPage(
-      pw.MultiPage(
-        build: (context) => [
-          pw.Text(
-            "Appointments Report - ${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}",
-            style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
-          ),
-          pw.SizedBox(height: 10),
-          pw.TableHelper.fromTextArray(
-            headers: ['Patient', 'Slot', 'Bed', 'Status'],
-            data: data,
-          ),
-        ],
-      ),
-    );
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
 
-    return pdf;
+    await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
-  Future<pw.Document> _buildPatientsPdf() async {
+  Future<void> _printPatientsReport() async {
     final pdf = pw.Document();
     final patientsSnap = await FirebaseFirestore.instance
         .collection('users')
@@ -447,7 +350,6 @@ class _ReportsPageState extends State<ReportsPage> {
       ];
     }).toList();
 
-<<<<<<< HEAD
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       build: (context) => [
@@ -465,24 +367,7 @@ class _ReportsPageState extends State<ReportsPage> {
         ),
       ],
     ));
-=======
-    pdf.addPage(
-      pw.MultiPage(
-        build: (context) => [
-          pw.Text(
-            "Patients Report",
-            style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
-          ),
-          pw.SizedBox(height: 10),
-          pw.TableHelper.fromTextArray(
-            headers: ['Name', 'Email'],
-            data: data,
-          ),
-        ],
-      ),
-    );
->>>>>>> c0aa50810a0c89b9e9e69ea70f0b5882491ca4a3
 
-    return pdf;
+    await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 }
