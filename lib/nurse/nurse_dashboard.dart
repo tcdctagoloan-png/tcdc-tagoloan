@@ -35,6 +35,8 @@ class _NurseDashboardState extends State<NurseDashboard> {
   DateTime _focusedDay = DateTime.now();
   int _patientsWithSchedule = 0;
   int _patientsWithoutSchedule = 0;
+  // Define the common height for the two middle cards for alignment
+  static const double _cardHeight = 350.0;
   // --- End: State Variables ---
 
   late final List<Widget> _pages;
@@ -51,9 +53,6 @@ class _NurseDashboardState extends State<NurseDashboard> {
     super.initState();
     _nurseId = widget.nurseId;
 
-    // The rest of the pages are safe, as they're not wrapped in SingleChildScrollView
-    // when loaded as the main content of the Scaffold body (in mobile)
-    // or the Expanded pane (in web).
     _pages = [
       _buildHomeTab(),
       NursePatientsPage(nurseId: _nurseId),
@@ -67,7 +66,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
     _fetchPatientScheduleSummary();
   }
 
-  // --- Data Fetching Methods ---
+  // --- Data Fetching Methods (No changes needed here) ---
 
   Future<void> _fetchPatientScheduleSummary() async {
     final allPatientsSnapshot = await FirebaseFirestore.instance
@@ -75,7 +74,6 @@ class _NurseDashboardState extends State<NurseDashboard> {
         .where('role', isEqualTo: 'patient')
         .get();
 
-    // Fetch appointments that are in the future or on the current day
     DateTime startOfToday = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
     final appointmentsSnapshot = await FirebaseFirestore.instance
@@ -149,20 +147,19 @@ class _NurseDashboardState extends State<NurseDashboard> {
 
   // --- UI Helpers ---
 
-  // FIX 1: Lower the wide-screen breakpoint from 900 to 650.
   bool _isWideScreen(BuildContext context) =>
       MediaQuery.of(context).size.width >= 650;
 
   void _onTap(int idx) => setState(() => _currentIndex = idx);
 
   // ----------------------------------------------------------------------------------
-  // --- REFINED: HOME TAB WITH NEW LAYOUT STRUCTURE (FIXED UNBOUNDED HEIGHT ERROR) ---
+  // --- REDESIGNED: HOME TAB WITH EQUAL HEIGHT CARDS ---
   // ----------------------------------------------------------------------------------
   Widget _buildHomeTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.only(top: 0),
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 28.0), // Added bottom padding for space below the last card
+        padding: const EdgeInsets.only(bottom: 28.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -181,10 +178,8 @@ class _NurseDashboardState extends State<NurseDashboard> {
             ),
             const SizedBox(height: 30),
 
-            // --- LAYOUT BUILDER FOR RESPONSIVE COLUMNS ---
             LayoutBuilder(
               builder: (context, constraints) {
-                // FIX 2: Lower the internal layout breakpoint from 850 to 600.
                 bool isWideLayout = constraints.maxWidth > 600;
 
                 return Column(
@@ -195,32 +190,36 @@ class _NurseDashboardState extends State<NurseDashboard> {
 
                     const SizedBox(height: 20),
 
-                    // 2. MIDDLE ROW: SCHEDULE SUMMARY & DAILY CAPACITY CHART (Side-by-Side)
+                    // 2. MIDDLE ROW: SCHEDULE SUMMARY & DAILY CAPACITY CHART (Equal Height)
                     isWideLayout
-                        ? Row( // Use Row for wide screen
+                        ? Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded( // Expanded is safe inside a horizontal Row in a vertically scrolling view
+                        Expanded(
                           flex: 5,
-                          child: _buildScheduleSummaryCard(),
+                          // WRAP IN SIZEDBOX FOR FIXED HEIGHT
+                          child: SizedBox(
+                              height: _cardHeight,
+                              child: _buildScheduleSummaryCard()),
                         ),
                         const SizedBox(width: 20),
                         Expanded(
                           flex: 5,
-                          child: _buildDailyCapacityCard(context),
+                          // WRAP IN SIZEDBOX FOR FIXED HEIGHT
+                          child: SizedBox(
+                              height: _cardHeight,
+                              child: _buildDailyCapacityCard(context)),
                         ),
                       ],
                     )
-                        : Column( // Use Column for narrow screen (mobile)
+                        : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Allow cards to take their natural height (NO Expanded here)
                         _buildScheduleSummaryCard(),
                         const SizedBox(height: 20),
                         _buildDailyCapacityCard(context),
                       ],
                     ),
-
 
                     const SizedBox(height: 20),
 
@@ -240,11 +239,12 @@ class _NurseDashboardState extends State<NurseDashboard> {
 
   /// --- DATA VISUALIZATION WIDGETS ---
 
-  // Patient Schedule Summary Card
+  // Patient Schedule Summary Card (Removed fixed height container)
   Widget _buildScheduleSummaryCard() {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
       elevation: 4,
+      // Removed Container with fixed padding/height, let the content define it
       child: Container(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -268,13 +268,15 @@ class _NurseDashboardState extends State<NurseDashboard> {
               Colors.red,
               Icons.cancel_outlined,
             ),
+            // Added Spacer to push content up and ensure the card fills the height
+            const Spacer(),
           ],
         ),
       ),
     );
   }
 
-  // Helper for Schedule Summary Rows
+  // Helper for Schedule Summary Rows (No change)
   Widget _summaryRow(String title, int count, Color color, IconData icon) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -304,23 +306,21 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // Daily Capacity Card (Circular Chart)
+  // Daily Capacity Card (Circular Chart) (Removed fixed height container)
   Widget _buildDailyCapacityCard(BuildContext context) {
-    // Max capacity: Assuming 16 beds * 4 sessions/bed = 64 patients max daily capacity
     const int maxDailyCapacity = 64;
 
     return FutureBuilder<int>(
       future: _fetchDailyAppointmentCount(_selectedDay),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
+          // Changed height to match _cardHeight
           return Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             elevation: 4,
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              height: 300,
-              child: const Center(child: CircularProgressIndicator()),
-            ),
+            child: const SizedBox(
+                height: _cardHeight,
+                child: Center(child: CircularProgressIndicator())),
           );
         }
 
@@ -345,14 +345,12 @@ class _NurseDashboardState extends State<NurseDashboard> {
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 20),
-                SizedBox(
-                  height: 200,
+                Expanded( // Use Expanded inside the column to let PieChart take available space
                   child: PieChart(
                     PieChartData(
                       sectionsSpace: 2,
                       centerSpaceRadius: 50,
                       sections: [
-                        // Scheduled Section
                         PieChartSectionData(
                           color: Colors.lightGreen,
                           value: chartScheduledCount.toDouble(),
@@ -364,7 +362,6 @@ class _NurseDashboardState extends State<NurseDashboard> {
                             color: Colors.white,
                           ),
                         ),
-                        // Remaining Section
                         PieChartSectionData(
                           color: Colors.grey.shade300,
                           value: remainingCapacity.toDouble(),
@@ -406,7 +403,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // Calendar Card (Top)
+  // Calendar Card (Top) (No change)
   Widget _buildCalendarCard() {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -426,7 +423,6 @@ class _NurseDashboardState extends State<NurseDashboard> {
             setState(() {
               _selectedDay = selectedDay;
               _focusedDay = focusedDay;
-              // Trigger redraw of the Daily Capacity Card
             });
           }
         },
@@ -437,7 +433,40 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // Top Appointments Table (Bottom)
+  // --- NEW Custom Table Row Widget for Full Width ---
+  Widget _buildCustomTableRow({
+    required Widget name,
+    required Widget address,
+    required Widget email,
+    required Widget contact,
+    required Widget count,
+    bool isHeader = false,
+  }) {
+    // Custom table layout using Expanded with flex to control width
+    // Name and Address get more space (flex: 3 and 3)
+    // Email and Contact get moderate space (flex: 2 and 2)
+    // Count gets minimal space (flex: 1)
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      decoration: BoxDecoration(
+        color: isHeader ? Colors.green.shade50 : null,
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(flex: 3, child: name),
+          Expanded(flex: 3, child: address),
+          Expanded(flex: 2, child: email),
+          Expanded(flex: 2, child: contact),
+          Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: count)),
+        ],
+      ),
+    );
+  }
+
+  // Top Appointments Table (Redesigned with custom Expanded Row logic)
   Widget _buildTopAppointmentsTable() {
     return FutureBuilder<QuerySnapshot>(
       future: FirebaseFirestore.instance.collection('appointments').get(),
@@ -453,14 +482,12 @@ class _NurseDashboardState extends State<NurseDashboard> {
           return const Center(child: Text("Error loading appointments."));
         }
 
-        // 1. Count Appointments per Patient
         Map<String, int> patientAppointmentCounts = {};
         for (var doc in appointmentSnapshot.data!.docs) {
           final patientId = doc['patientId'] as String;
           patientAppointmentCounts.update(patientId, (value) => value + 1, ifAbsent: () => 1);
         }
 
-        // 2. Sort and Get Top 5 (or less)
         final sortedPatients = patientAppointmentCounts.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
         final topAppointments = sortedPatients.take(5).toList();
@@ -471,7 +498,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
           return _buildEmptyAppointmentsTable();
         }
 
-        // 3. Fetch Patient Details (Name, Email, Contact)
+        // 3. Fetch Patient Details (Name, Email, Address, Contact)
         return FutureBuilder<QuerySnapshot>(
           future: FirebaseFirestore.instance.collection('users').where(FieldPath.documentId, whereIn: requiredUserIds).get(),
           builder: (context, userSnapshot) {
@@ -490,21 +517,23 @@ class _NurseDashboardState extends State<NurseDashboard> {
               for (var doc in userSnapshot.data!.docs) doc.id: {
                 'fullName': doc['fullName'] ?? 'N/A',
                 'email': doc['email'] ?? 'N/A',
+                'address': doc['address'] ?? 'N/A',
                 'contactNumber': doc['contactNumber'] ?? 'N/A',
               }
             };
 
-            List<DataRow> rows = topAppointments.map((entry) {
+            List<Widget> rows = topAppointments.map((entry) {
               final patientId = entry.key;
               final count = entry.value;
-              final details = patientDetails[patientId] ?? {'fullName': 'Patient ID: $patientId', 'email': 'N/A', 'contactNumber': 'N/A'};
+              final details = patientDetails[patientId] ?? {'fullName': 'Patient ID: $patientId', 'email': 'N/A', 'address': 'N/A', 'contactNumber': 'N/A'};
 
-              return DataRow(cells: [
-                DataCell(Text(details['fullName']!, style: const TextStyle(fontWeight: FontWeight.w500))),
-                DataCell(Text(details['email']!)),
-                DataCell(Text(details['contactNumber']!)),
-                DataCell(Text(count.toString())),
-              ]);
+              return _buildCustomTableRow(
+                name: Text(details['fullName']!, style: const TextStyle(fontWeight: FontWeight.w500)),
+                address: Text(details['address']!, overflow: TextOverflow.ellipsis),
+                email: Text(details['email']!, overflow: TextOverflow.ellipsis),
+                contact: Text(details['contactNumber']!),
+                count: Text(count.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+              );
             }).toList();
 
             return Card(
@@ -523,20 +552,17 @@ class _NurseDashboardState extends State<NurseDashboard> {
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                     ),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: DataTable(
-                        columnSpacing: 25, // Adjusted spacing for more columns
-                        headingRowColor: MaterialStateProperty.all(Colors.green.shade50),
-                        columns: const [
-                          DataColumn(label: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Contact Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                          DataColumn(label: Text('Total Appts', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
-                        ],
-                        rows: rows,
-                      ),
+                    // Table Header
+                    _buildCustomTableRow(
+                      isHeader: true,
+                      name: const Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold)),
+                      address: const Text('Address', style: TextStyle(fontWeight: FontWeight.bold)),
+                      email: const Text('Email', style: TextStyle(fontWeight: FontWeight.bold)),
+                      contact: const Text('Contact', style: TextStyle(fontWeight: FontWeight.bold)),
+                      count: const Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
+                    // Table Rows
+                    ...rows,
                   ],
                 ),
               ),
@@ -547,7 +573,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // Helper for empty appointments table
+  // Helper for empty appointments table (Redesigned with custom Expanded Row logic)
   Widget _buildEmptyAppointmentsTable() {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -563,24 +589,22 @@ class _NurseDashboardState extends State<NurseDashboard> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
-            Center(
-              child: DataTable(
-                columnSpacing: 25,
-                columns: const [
-                  DataColumn(label: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('Contact Number', style: TextStyle(fontWeight: FontWeight.bold))),
-                  DataColumn(label: Text('Total Appts', style: TextStyle(fontWeight: FontWeight.bold)), numeric: true),
-                ],
-                rows: const [
-                  DataRow(cells: [
-                    DataCell(Text("No appointments recorded")),
-                    DataCell(Text("N/A")),
-                    DataCell(Text("N/A")),
-                    DataCell(Text("0")),
-                  ]),
-                ],
-              ),
+            // Table Header
+            _buildCustomTableRow(
+              isHeader: true,
+              name: const Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold)),
+              address: const Text('Address', style: TextStyle(fontWeight: FontWeight.bold)),
+              email: const Text('Email', style: TextStyle(fontWeight: FontWeight.bold)),
+              contact: const Text('Contact', style: TextStyle(fontWeight: FontWeight.bold)),
+              count: const Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            // Empty Row
+            _buildCustomTableRow(
+              name: const Text("No appointments recorded"),
+              address: const Text("N/A"),
+              email: const Text("N/A"),
+              contact: const Text("N/A"),
+              count: const Text("0"),
             ),
           ],
         ),
@@ -589,13 +613,13 @@ class _NurseDashboardState extends State<NurseDashboard> {
   }
 
   // ----------------------------------------------------------------------------------
-  // --- MAIN BUILD METHOD (Web & Mobile Layout) ---
+  // --- MAIN BUILD METHOD (Web & Mobile Layout - No significant changes) ---
   // ----------------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
     if (!_isWideScreen(context)) {
-      // Mobile Layout (Now correctly renders for phones, including landscape)
+      // Mobile Layout (No change)
       return Scaffold(
         appBar: AppBar(
           title: Text(_titles[_currentIndex]),
@@ -655,7 +679,7 @@ class _NurseDashboardState extends State<NurseDashboard> {
       );
     }
 
-    // Web Layout (Clean, Professional Admin Panel Look)
+    // Web Layout (No change)
     return Scaffold(
       backgroundColor: Colors.grey[100],
       body: Row(
@@ -806,8 +830,6 @@ class _NurseDashboardState extends State<NurseDashboard> {
           ),
           Expanded(
             child: Container(
-              // REMOVED CARD EFFECT: Match the background of the main content area
-              // to the Scaffold background (Colors.grey[100]).
               color: Colors.grey[100],
               padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
               child: _pages[_currentIndex],
@@ -852,13 +874,14 @@ class _WebNavItem extends StatelessWidget {
                 padding: const EdgeInsets.all(4),
                 decoration: const BoxDecoration(
                     color: Colors.red, shape: BoxShape.circle),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
                 child: Text(
                   '$badgeCount',
                   style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
                       fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center, // <-- CLOSING LINE
+                  textAlign: TextAlign.center,
                 ),
               ),
             ),

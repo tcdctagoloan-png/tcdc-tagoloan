@@ -9,8 +9,7 @@ class PatientData {
   final String fullName;
   final bool isVerified;
   final bool hasActiveAppointment;
-  // New flag to identify patients added as walk-in today
-  final bool isWalkInToday;
+  // Removed: isWalkInToday
   final Timestamp? userCreationDate;
 
   PatientData({
@@ -18,7 +17,6 @@ class PatientData {
     required this.fullName,
     required this.isVerified,
     required this.hasActiveAppointment,
-    this.isWalkInToday = false,
     this.userCreationDate,
   });
 }
@@ -39,12 +37,10 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     "18:00 - 22:00"
   ];
   String searchQuery = "";
+  // Changed from 0 to 0 (Verified)
   int _selectedTabIndex = 0;
 
-  // Define the boundary for "Walk-in Today"
-  final DateTime _todayStart = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
-  // --- 1. Combined Data Fetching and Sorting (Single Source of Truth) ---
+  // --- 1. Combined Data Fetching and Sorting (Walk-in logic removed) ---
   Future<List<PatientData>> _fetchAllPatientData() async {
     // 1. Fetch all patients (Filtered to 'patient' role)
     final userSnap = await FirebaseFirestore.instance
@@ -71,23 +67,13 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
       final isVerified = data['verified'] == true;
       final createdAt = data['createdAt'] as Timestamp?;
 
-      // Determine if they are a 'Walk-in Today'
-      bool isWalkInToday = false;
-      if (isVerified && createdAt != null) {
-        final dateAdded = createdAt.toDate();
-        // If patient was verified and added today, treat as a Walk-in for the nurse's flow.
-        if (dateAdded.isAfter(_todayStart)) {
-          isWalkInToday = true;
-        }
-      }
-
       allPatients.add(PatientData(
         id: patientId,
         fullName: data['fullName'] ?? 'N/A',
         isVerified: isVerified,
         hasActiveAppointment: hasActive,
-        isWalkInToday: isWalkInToday,
         userCreationDate: createdAt,
+        // Removed: isWalkInToday flag
       ));
     }
 
@@ -101,7 +87,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
   // --- CAPACITY CHECK HELPER (Checks bed availability for a specific date/slot) ---
   Future<Map<String, int>> _fetchBedAssignmentCounts(DateTime dateData, String slotData) async {
-    // Ensure the timestamp is for the start of the day for consistent query
     final DateTime dateOnly = DateTime(dateData.year, dateData.month, dateData.day);
     final Timestamp startOfDay = Timestamp.fromDate(dateOnly);
     final Timestamp endOfDay = Timestamp.fromDate(dateOnly.add(const Duration(days: 1)));
@@ -111,7 +96,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
         .where('date', isGreaterThanOrEqualTo: startOfDay)
         .where('date', isLessThan: endOfDay)
         .where('slot', isEqualTo: slotData.trim())
-        .where('status', isEqualTo: 'approved') // Only count approved assignments
+        .where('status', isEqualTo: 'approved')
         .get();
 
     final Map<String, int> bedCounts = {};
@@ -129,11 +114,11 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
   }
   // --- END CAPACITY CHECK HELPER ---
 
-  // --- Booking Modal / Dialog (UPDATED: Handles Walk-in auto-date setting) ---
+  // --- Booking Modal / Dialog (Simplified) ---
   Future<void> _openBookingForm(
-      BuildContext context, String patientId, String patientName, bool isWalkIn) async {
-    // Walk-in patients are scheduled for today, others default to today but can pick.
-    DateTime selectedDate = isWalkIn ? DateTime.now() : DateTime.now();
+      BuildContext context, String patientId, String patientName) async {
+    // Standard patients default to today
+    DateTime selectedDate = DateTime.now();
     String? selectedSlot;
     String? selectedBed;
     String? selectedBedId;
@@ -157,14 +142,14 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
     Widget form = StatefulBuilder(
       builder: (context, setStateInModal) {
-        final bool isSlotSelected = selectedSlot != null;
+        // The walk-in specific display has been removed
 
         return DefaultTabController(
           length: 2,
           child: Scaffold(
             appBar: AppBar(
               title: Text("Schedule Appointment for $patientName"),
-              backgroundColor: Colors.blue[700], // Using [] for safety
+              backgroundColor: Colors.blue[700],
               foregroundColor: Colors.white,
             ),
             body: Column(
@@ -184,24 +169,22 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Colors.green[700], // Using [] for safety
+                              color: Colors.green[700],
                             ),
                           ),
                         ],
                       ),
-                      if (!isWalkIn)
-                        ElevatedButton.icon(
-                          onPressed: () => _pickDate(setStateInModal),
-                          icon: const Icon(Icons.calendar_month, size: 18),
-                          label: const Text("Change Date"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green[600], // Using [] for safety
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        )
-                      else
-                        Text("Walk-in", style: TextStyle(fontSize: 16, color: Colors.purple[600], fontWeight: FontWeight.bold)), // Using [] for safety
+                      // Allow date picking for all
+                      ElevatedButton.icon(
+                        onPressed: () => _pickDate(setStateInModal),
+                        icon: const Icon(Icons.calendar_month, size: 18),
+                        label: const Text("Change Date"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green[600],
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      )
                     ],
                   ),
                 ),
@@ -215,13 +198,11 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                       _buildSlotsTab(selectedDate, slots, (slot) {
                         setStateInModal(() {
                           selectedSlot = slot;
-                          // Clear bed selection when slot changes
                           selectedBed = null;
                           selectedBedId = null;
                         });
                       }, selectedSlot),
 
-                      // **UPDATED:** Pass selectedSlot to the beds tab
                       _buildBedsTab(selectedDate, selectedSlot, (bedId, bedName) {
                         setStateInModal(() {
                           selectedBed = bedName;
@@ -254,7 +235,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                             child: const Text("Cancel")),
                         ElevatedButton(
                             onPressed: () => Navigator.pop(ctx, true),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white), // Using [] for safety
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
                             child: const Text("Confirm")),
                       ],
                     ),
@@ -274,7 +255,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                     'bedId': selectedBedId,
                     'bedName': selectedBed,
                     'status': 'approved',
-                    'isWalkIn': isWalkIn, // Mark appointment as walk-in
                     'createdAt': FieldValue.serverTimestamp(),
                   });
 
@@ -294,7 +274,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                   minimumSize: const Size(double.infinity, 50),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
-                  backgroundColor: Colors.blue[600], // Using [] for safety
+                  backgroundColor: Colors.blue[600],
                   foregroundColor: Colors.white,
                 ),
                 child: const Text("Confirm Appointment"),
@@ -310,7 +290,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
         context: context,
         builder: (ctx) => Dialog(
           insetPadding: const EdgeInsets.all(32),
-          child: SizedBox(width: 700, height: 650, child: form), // Increased height slightly
+          child: SizedBox(width: 700, height: 650, child: form),
         ),
       );
     } else {
@@ -325,10 +305,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     }
   }
 
-  // --- Slots Tab (UPDATED to match design and fix errors) ---
+  // --- Slots Tab (No change needed, logic is independent of walk-in) ---
   Widget _buildSlotsTab(DateTime selectedDate, List<String> slots,
       Function(String) onSelect, String? selectedSlot) {
-    // Filters appointments by selectedDate and status 'pending', 'approved', 'rescheduled'
     return Padding(
       padding: const EdgeInsets.all(16),
       child: FutureBuilder<QuerySnapshot>(
@@ -357,7 +336,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
             return const Center(child: Text("No slot data available."));
           }
 
-          const int maxSlots = 16; // Maximum slots available per time window
+          const int maxSlots = 16;
           Map<String, int> slotCounts = {for (var s in slots) s: 0};
           for (var doc in apptSnap.data!.docs) {
             final data = doc.data() as Map<String, dynamic>;
@@ -373,9 +352,8 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
               int count = slotCounts[s] ?? 0;
               bool slotFull = count >= maxSlots;
               bool isSelected = selectedSlot == s;
-              int available = maxSlots - count;
+              // int available = maxSlots - count; // available variable removed as it's not used in this scope
 
-              // Use MaterialColor constants which have shades defined
               final MaterialColor color = slotFull
                   ? Colors.red
                   : Colors.green;
@@ -389,7 +367,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                     side: BorderSide(
-                      // FIX: Use [] accessor for MaterialColor
                         color: isSelected ? Colors.blue[700]! : color[300]!,
                         width: isSelected ? 3 : 1
                     ),
@@ -398,13 +375,12 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                     contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
                     leading: Icon(
                       isSelected ? Icons.check_circle : (slotFull ? Icons.cancel : Icons.check_circle_outline),
-                      color: isSelected ? Colors.blue[700] : color, // Use [] accessor for MaterialColor
+                      color: isSelected ? Colors.blue[700] : color,
                       size: 30,
                     ),
                     title: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     subtitle: Text(
                       "Booked: $count / $maxSlots | Status: $statusText",
-                      // FIX: Use [] accessor for MaterialColor
                       style: TextStyle(color: color[700], fontSize: 13),
                     ),
                     trailing: ElevatedButton.icon(
@@ -412,7 +388,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                       label: Text(isSelected ? "Selected" : "Select"),
                       onPressed: slotFull ? null : () => onSelect(s),
                       style: ElevatedButton.styleFrom(
-                        // FIX: Use [] accessor for MaterialColor
                         backgroundColor: isSelected ? Colors.blue[700] : color[600],
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
@@ -431,7 +406,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     );
   }
 
-  // --- Beds Tab (UPDATED to match design and fix errors) ---
+  // --- Beds Tab (No change needed, logic is independent of walk-in) ---
   Widget _buildBedsTab(DateTime selectedDate, String? selectedSlot,
       Function(String, String) onSelect, String? selectedBedId) {
 
@@ -463,7 +438,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: FutureBuilder<Map<String, int>>(
-        // 1. Fetch capacity counts for the specific date/slot
         future: _fetchBedAssignmentCounts(selectedDate, selectedSlot),
         builder: (context, assignmentSnap) {
           if (assignmentSnap.connectionState == ConnectionState.waiting) {
@@ -471,10 +445,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
           }
 
           final bedCounts = assignmentSnap.data ?? {};
-          const int maxCapacityPerBed = 4; // Max capacity per bed per slot
+          const int maxCapacityPerBed = 4;
 
           return FutureBuilder<QuerySnapshot>(
-            // 2. Fetch ALL working beds
             future: FirebaseFirestore.instance
                 .collection('beds')
                 .where('isWorking', isEqualTo: true)
@@ -498,7 +471,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text("Date: ${DateFormat('MMM d, yyyy').format(selectedDate)}", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                        Text("Slot: $selectedSlot (Capacity: $maxCapacityPerBed/Bed)", style: TextStyle(color: Colors.grey[700], fontSize: 14)), // Using [] for safety
+                        Text("Slot: $selectedSlot (Capacity: $maxCapacityPerBed/Bed)", style: TextStyle(color: Colors.grey[700], fontSize: 14)),
                       ],
                     ),
                   ),
@@ -520,7 +493,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
                               side: BorderSide(
-                                  color: isSelected ? Colors.blue[700]! : Colors.transparent, // Using [] for safety
+                                  color: isSelected ? Colors.blue[700]! : Colors.transparent,
                                   width: isSelected ? 2 : 1
                               ),
                             ),
@@ -528,7 +501,6 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                               title: Text(bedName, style: TextStyle(fontWeight: FontWeight.bold, color: isFull ? Colors.grey : Colors.black87)),
                               subtitle: Text(
                                 "Assigned: $assignedCount / $maxCapacityPerBed",
-                                // FIX: Use [] accessor for MaterialColor
                                 style: TextStyle(color: color[700], fontSize: 13),
                               ),
                               value: bedId,
@@ -539,11 +511,10 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                                 }
                               },
                               secondary: Icon(
-                                // FIX: Changed 'bed_time' to 'block'
                                 isFull ? Icons.block : Icons.bed,
                                 color: isFull ? Colors.red[300] : (isSelected ? Colors.blue[700] : Colors.grey),
                               ),
-                              activeColor: Colors.blue[700], // Using [] for safety
+                              activeColor: Colors.blue[700],
                             ),
                           ),
                         );
@@ -573,13 +544,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
         final allPatients = snapshot.data!;
 
-        // 3. Filter patients based on search and status
-        final walkInTodayPatients = allPatients
-            .where((p) => p.isWalkInToday && p.fullName.toLowerCase().contains(searchQuery))
-            .toList();
-
+        // 2. Filter patients into only Verified and Unverified (Walk-in removed)
         final verifiedPatients = allPatients
-            .where((p) => p.isVerified && !p.isWalkInToday && p.fullName.toLowerCase().contains(searchQuery))
+            .where((p) => p.isVerified && p.fullName.toLowerCase().contains(searchQuery))
             .toList();
 
         final unverifiedPatients = allPatients
@@ -590,18 +557,15 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
         // --- Mobile Layout ---
         if (!kIsWeb) {
-          // Mobile focuses on immediate scheduling (Walk-in and Verified)
-          final mobilePatients = [...walkInTodayPatients, ...verifiedPatients]
-              .where((p) => p.fullName.toLowerCase().contains(searchQuery))
-              .toList();
-
-          return _buildMobileLayout(mobilePatients);
+          // Mobile focuses on verified patients
+          return _buildMobileLayout(verifiedPatients);
         }
 
         // --- Web Layout ---
         return DefaultTabController(
-          length: 3,
-          initialIndex: _selectedTabIndex,
+          // Only two tabs now: Verified and Unverified
+          length: 2,
+          initialIndex: _selectedTabIndex.clamp(0, 1), // Clamp to prevent index error
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -615,7 +579,8 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                       color: Colors.black87),
                 ),
                 const SizedBox(height: 16),
-                _buildStatCards(verifiedPatients, unverifiedPatients, walkInTodayPatients.length, totalPatientsCount),
+                // Pass 0 for the now-removed walkInCount
+                _buildStatCards(verifiedPatients, unverifiedPatients, 0, totalPatientsCount),
                 const SizedBox(height: 24),
 
                 // Search bar and Tabs
@@ -645,15 +610,16 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                         indicatorSize: TabBarIndicatorSize.label,
                         indicator: BoxDecoration(
                           borderRadius: BorderRadius.circular(10),
-                          color: Colors.blue[100], // Using [] for safety
+                          color: Colors.blue[100],
                         ),
-                        labelColor: Colors.blue[800], // Using [] for safety
+                        labelColor: Colors.blue[800],
                         unselectedLabelColor: Colors.black54,
                         labelStyle: const TextStyle(fontWeight: FontWeight.bold),
                         onTap: (index) => setState(() => _selectedTabIndex = index),
                         tabs: [
-                          Tab(text: "Walk-in Today (${walkInTodayPatients.length})"),
+                          // Tab 1: Verified
                           Tab(text: "Verified (${verifiedPatients.length})"),
+                          // Tab 2: Unverified
                           Tab(text: "Unverified (${unverifiedPatients.length})"),
                         ],
                       ),
@@ -667,12 +633,10 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                   child: TabBarView(
                     physics: const NeverScrollableScrollPhysics(),
                     children: [
-                      // Tab 1: Walk-in Today
-                      _buildPatientTable(walkInTodayPatients, context, isWalkInTab: true),
-                      // Tab 2: Verified (Standard, long-term patients)
-                      _buildPatientTable(verifiedPatients, context, isWalkInTab: false),
-                      // Tab 3: Unverified (Cannot be scheduled)
-                      _buildPatientTable(unverifiedPatients, context, isWalkInTab: false),
+                      // Tab 1: Verified (Standard, long-term patients)
+                      _buildPatientTable(verifiedPatients, context),
+                      // Tab 2: Unverified (Cannot be scheduled)
+                      _buildPatientTable(unverifiedPatients, context),
                     ],
                   ),
                 ),
@@ -686,9 +650,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
 
   // --- Web Layout Components ---
 
-  // Refactored Table to handle Walk-in and Scheduling logic
+  // Refactored Table to handle ONLY Verified and Unverified
   Widget _buildPatientTable(
-      List<PatientData> patients, BuildContext context, {required bool isWalkInTab}) {
+      List<PatientData> patients, BuildContext context) {
     if (patients.isEmpty) {
       return Center(
         child: Text(
@@ -714,7 +678,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
       ),
       child: Column(
         children: [
-          // Table Header (Kept the same)
+          // Table Header
           Container(
             padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
             decoration: const BoxDecoration(
@@ -762,15 +726,12 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                 final bool isSchedulingDisabled = hasActive || !patient.isVerified;
 
                 String statusText;
-                // Use MaterialColor for statusColor to allow shade access
                 final MaterialColor statusColor;
 
+                // SIMPLIFIED STATUS LOGIC
                 if (!patient.isVerified) {
                   statusText = "UNVERIFIED (No Schedule)";
                   statusColor = Colors.red;
-                } else if (patient.isWalkInToday) {
-                  statusText = hasActive ? "WALK-IN BOOKED TODAY" : "WALK-IN READY";
-                  statusColor = hasActive ? Colors.green : Colors.purple;
                 } else {
                   statusText = hasActive ? "BOOKED" : "NO APPOINTMENT";
                   statusColor = hasActive ? Colors.green : Colors.orange;
@@ -787,8 +748,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                         child: Row(
                           children: [
                             CircleAvatar(
-                              backgroundColor: patient.isWalkInToday ? Colors.purple : (patient.isVerified ? Colors.blueAccent : Colors.redAccent),
-                              child: Icon(patient.isWalkInToday ? Icons.directions_walk : Icons.person_outline, color: Colors.white, size: 20),
+                              // SIMPLIFIED AVATAR COLOR/ICON
+                              backgroundColor: patient.isVerified ? Colors.blueAccent : Colors.redAccent,
+                              child: const Icon(Icons.person_outline, color: Colors.white, size: 20),
                             ),
                             const SizedBox(width: 12),
                             Text(patientName,
@@ -803,14 +765,12 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            // This now correctly uses the MaterialColor property:
                             color: statusColor[100],
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             statusText,
                             style: TextStyle(
-                              // This now correctly uses the MaterialColor property:
                               color: statusColor[900],
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
@@ -828,9 +788,11 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                             onPressed: isSchedulingDisabled
                                 ? null
                                 : () =>
-                                _openBookingForm(context, patientId, patientName, patient.isWalkInToday),
+                            // REMOVED WALK-IN ARGUMENT
+                            _openBookingForm(context, patientId, patientName),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: isSchedulingDisabled ? Colors.grey[400] : (patient.isWalkInToday ? Colors.purple[600] : Colors.blue[600]), // Using [] for safety
+                              // SIMPLIFIED BUTTON COLOR
+                              backgroundColor: isSchedulingDisabled ? Colors.grey[400] : Colors.blue[600],
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8)),
@@ -853,8 +815,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
   }
 
   Widget _buildStatCards(List<PatientData> verified, List<PatientData> unverified, int walkInCount, int totalCount) {
-    final int scheduledCount = verified.where((p) => p.hasActiveAppointment).length + walkInCount;
-    final int readyToScheduleCount = verified.length - verified.where((p) => p.hasActiveAppointment).length;
+    // walkInCount is now 0
+    final int scheduledCount = verified.where((p) => p.hasActiveAppointment).length;
+    final int readyToScheduleCount = verified.length - scheduledCount;
 
     return Row(
       children: [
@@ -863,13 +826,14 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
             Icons.group,
             Colors.blue,
             totalCount.toString()),
+        // REMOVED WALK-IN CARD
         _buildStatCard(
-            "Walk-in Today",
-            Icons.directions_walk,
-            Colors.purple,
-            walkInCount.toString()),
+            "Scheduled Sessions",
+            Icons.calendar_month,
+            Colors.green,
+            scheduledCount.toString()),
         _buildStatCard(
-            "Verified Ready",
+            "Ready to Schedule",
             Icons.pending_actions,
             Colors.orange,
             readyToScheduleCount.toString()),
@@ -919,8 +883,9 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
     );
   }
 
-  // --- Mobile Layout (Simplified to combine walk-in and verified) ---
+  // --- Mobile Layout (Simplified) ---
   Widget _buildMobileLayout(List<PatientData> patients) {
+    // Only verified patients are passed to this view
     final patientData = patients
         .where((p) => p.fullName.toLowerCase().contains(searchQuery))
         .toList();
@@ -946,7 +911,7 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
           const SizedBox(height: 16),
           Expanded(
             child: patientData.isEmpty
-                ? Center(child: Text(searchQuery.isNotEmpty ? "No patients match '$searchQuery'." : "No verified patients found."))
+                ? Center(child: Text(searchQuery.isNotEmpty ? "No verified patients match '$searchQuery'." : "No verified patients found."))
                 : ListView.separated(
               itemCount: patientData.length,
               separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -957,29 +922,29 @@ class _NursePatientsPageState extends State<NursePatientsPage> {
                 final hasActive = patient.hasActiveAppointment;
 
                 final bool isSchedulingDisabled = hasActive || !patient.isVerified;
-                final bool isWalkIn = patient.isWalkInToday;
+                // Removed: isWalkIn logic
 
                 return Card(
                   elevation: 2,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: isWalkIn ? Colors.purple : Colors.blueAccent,
-                      child: Icon(isWalkIn ? Icons.directions_walk : Icons.person, color: Colors.white),
+                    leading: const CircleAvatar(
+                      backgroundColor: Colors.blueAccent, // Simplified color
+                      child: Icon(Icons.person, color: Colors.white),
                     ),
                     title: Text(patientName, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(isWalkIn
-                        ? (hasActive ? "Walk-in Booked Today" : "Walk-in Ready")
-                        : (hasActive ? "Booked" : "Ready to Schedule")),
+                    subtitle: Text(hasActive ? "Booked" : "Ready to Schedule"), // Simplified subtitle
                     trailing: ElevatedButton(
                       onPressed: isSchedulingDisabled
                           ? null
                           : () =>
-                          _openBookingForm(context, patientId, patientName, isWalkIn),
+                      // REMOVED WALK-IN ARGUMENT
+                      _openBookingForm(context, patientId, patientName),
                       child: Text(hasActive ? "Booked" : "Schedule"),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: isSchedulingDisabled ? Colors.grey : (isWalkIn ? Colors.purple : Colors.blue),
+                        // SIMPLIFIED BUTTON COLOR
+                        backgroundColor: isSchedulingDisabled ? Colors.grey : Colors.blue,
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8)),

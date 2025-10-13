@@ -5,6 +5,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'dart:async';
+import 'package:intl/intl.dart'; // Add intl for consistent date formatting
 
 class ReportsPage extends StatefulWidget {
   final String? role; // "admin" or "patient"
@@ -22,21 +23,19 @@ class _ReportsPageState extends State<ReportsPage> {
 
   // Format date as "Month Day, Year"
   String _formatDate(DateTime date) {
-    const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+    // Using DateFormat from intl package for reliable formatting
+    return DateFormat('MMMM d, yyyy').format(date);
   }
 
   // Fetch user name
   Future<String> _fetchUserName(String? userId) async {
-    if (userId == null || userId.isEmpty) return 'N/A';
+    if (userId == null || userId.isEmpty) return 'N/A (No ID)';
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+      if (!doc.exists) return 'N/A (Deleted User)';
       return doc.data()?['fullName'] ?? 'Unknown User';
     } catch (_) {
-      return 'Error';
+      return 'Error Fetching Name';
     }
   }
 
@@ -45,103 +44,119 @@ class _ReportsPageState extends State<ReportsPage> {
     if (bedId == null || bedId.isEmpty) return 'Unassigned';
     try {
       final doc = await FirebaseFirestore.instance.collection('beds').doc(bedId).get();
+      if (!doc.exists) return 'Unassigned (Deleted Bed)';
       return doc.data()?['name'] ?? 'Unknown Bed';
     } catch (_) {
-      return 'Error';
+      return 'Error Fetching Bed';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Reports"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.print),
-            onPressed: () async {
-              switch (_currentTab) {
-                case 0:
-                  await _printBedsReport();
-                  break;
-                case 1:
-                  await _printAppointmentsReport();
-                  break;
-                case 2:
-                  await _printPatientsReport();
-                  break;
-              }
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(
-              children: [
-                const Text("Selected Date: ", style: TextStyle(fontWeight: FontWeight.w500)),
-                TextButton(
-                  child: Text(_formatDate(_selectedDate),
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  onPressed: () async {
-                    final date = await showDatePicker(
-                      context: context,
-                      initialDate: _selectedDate,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text("Reports"),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.print),
+              tooltip: 'Print Current Report',
+              onPressed: () async {
+                try {
+                  switch (_currentTab) {
+                    case 0:
+                      await _printBedsReport();
+                      break;
+                    case 1:
+                      await _printAppointmentsReport();
+                      break;
+                    case 2:
+                      await _printPatientsReport();
+                      break;
+                  }
+                } catch (e) {
+                  // Show an error message to the user if printing fails
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to generate report: $e')),
                     );
-                    if (date != null) setState(() => _selectedDate = date);
-                  },
-                ),
-              ],
+                  }
+                }
+              },
             ),
+          ],
+          // TabBar placed in AppBar bottom for cleaner layout (Standard practice)
+          bottom: TabBar(
+            onTap: (index) => setState(() => _currentTab = index),
+            tabs: const [
+              Tab(text: "Beds Utilization"),
+              Tab(text: "Daily Appointments"),
+              Tab(text: "Patient Directory"),
+            ],
           ),
-          Expanded(
-            child: DefaultTabController(
-              length: 3,
-              child: Column(
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: Row(
                 children: [
-                  TabBar(
-                    onTap: (index) => setState(() => _currentTab = index),
-                    tabs: const [
-                      Tab(text: "Beds Utilization"),
-                      Tab(text: "Daily Appointments"),
-                      Tab(text: "Patient Directory"),
-                    ],
-                  ),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _bedsTab(),
-                        _appointmentsTab(),
-                        _patientsTab(),
-                      ],
-                    ),
+                  const Text("Reporting Date: ", style: TextStyle(fontWeight: FontWeight.w500)),
+                  TextButton.icon(
+                    icon: const Icon(Icons.calendar_today, size: 16),
+                    label: Text(_formatDate(_selectedDate),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    onPressed: () async {
+                      final date = await showDatePicker(
+                        context: context,
+                        initialDate: _selectedDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2100),
+                      );
+                      if (date != null) setState(() => _selectedDate = date);
+                    },
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+            const Divider(height: 1),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _bedsTab(),
+                  _appointmentsTab(),
+                  _patientsTab(),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
+  // --- UI Tab Views ---
+
   Widget _bedsTab() {
+    // Only fetch beds once, then use FutureBuilder for appointments based on date
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('beds').snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text("No beds found."));
+
         final beds = snapshot.data!.docs;
+
         return ListView.builder(
           itemCount: beds.length,
           itemBuilder: (context, index) {
             final bed = beds[index];
             final bedData = bed.data() as Map<String, dynamic>;
+
+            // FutureBuilder is now nested to react to _selectedDate changes
             return FutureBuilder<QuerySnapshot>(
+              // Key change: Query on the selected date
               future: FirebaseFirestore.instance
                   .collection('appointments')
                   .where('bedId', isEqualTo: bed.id)
@@ -149,14 +164,16 @@ class _ReportsPageState extends State<ReportsPage> {
                   .where('date', isEqualTo: Timestamp.fromDate(_selectedDate))
                   .get(),
               builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) return const ListTile(title: Text('Loading Bed Data...'));
+                if (snap.connectionState == ConnectionState.waiting) return const ListTile(title: Text('Loading Bed Utilization...'));
+
                 final assignedCount = snap.data?.docs.length ?? 0;
+
                 return Card(
                   elevation: 2,
                   margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                   child: ListTile(
                     title: Text(bedData['name'] ?? 'Unknown Bed', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    subtitle: Text("Assigned Appointments for ${_formatDate(_selectedDate)}: $assignedCount"),
+                    subtitle: Text("Appointments on ${_formatDate(_selectedDate)}: $assignedCount"),
                     trailing: Text(
                       bedData['isWorking'] == true ? "🟢 Working" : "🔴 Not Working",
                       style: TextStyle(
@@ -184,21 +201,32 @@ class _ReportsPageState extends State<ReportsPage> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text("No appointments scheduled for this date."));
+
         final appointments = snapshot.data!.docs;
+
         return ListView.builder(
           itemCount: appointments.length,
           itemBuilder: (context, index) {
             final app = appointments[index].data() as Map<String, dynamic>;
             final patientId = app['patientId'] as String?;
             final bedId = app['bedId'] as String?;
+
+            // Fetch patient and bed name concurrently
             return FutureBuilder<List<String>>(
               future: Future.wait([_fetchUserName(patientId), _fetchBedName(bedId)]),
               builder: (context, nameSnapshot) {
                 if (nameSnapshot.connectionState == ConnectionState.waiting) return const ListTile(title: Text('Loading Appointment Details...'));
+
                 final patientName = nameSnapshot.data?[0] ?? 'Unknown Patient';
                 final bedName = nameSnapshot.data?[1] ?? 'Unassigned Bed';
                 final status = app['status'] ?? 'N/A';
                 final slot = app['slot'] ?? 'N/A';
+
+                Color statusColor = Colors.grey;
+                if (status == 'approved') statusColor = Colors.blue;
+                else if (status == 'completed') statusColor = Colors.green;
+                else if (status == 'cancelled') statusColor = Colors.red;
+
                 return Card(
                   elevation: 2,
                   margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
@@ -206,7 +234,7 @@ class _ReportsPageState extends State<ReportsPage> {
                     leading: Text(slot, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     title: Text("Patient: $patientName", style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text("Bed: $bedName"),
-                    trailing: Text(status, style: TextStyle(color: status == 'approved' ? Colors.blue : Colors.grey)),
+                    trailing: Text(status, style: TextStyle(color: statusColor)),
                   ),
                 );
               },
@@ -227,7 +255,9 @@ class _ReportsPageState extends State<ReportsPage> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text("No patient data found."));
+
         final patients = snapshot.data!.docs;
+
         return ListView.builder(
           itemCount: patients.length,
           itemBuilder: (context, index) {
@@ -248,47 +278,57 @@ class _ReportsPageState extends State<ReportsPage> {
 
   // ================= PDF PRINT FUNCTIONS =================
 
+  /// Prints the Beds Utilization Report for the selected date.
   Future<void> _printBedsReport() async {
     final pdf = pw.Document();
     final bedsSnap = await FirebaseFirestore.instance.collection('beds').get();
     final bedsData = <List<String>>[];
+
     for (var bed in bedsSnap.docs) {
       final bedMap = bed.data() as Map<String, dynamic>;
+      // Fetch only approved appointments for the selected date
       final assignedSnap = await FirebaseFirestore.instance
           .collection('appointments')
           .where('bedId', isEqualTo: bed.id)
           .where('status', isEqualTo: 'approved')
           .where('date', isEqualTo: Timestamp.fromDate(_selectedDate))
           .get();
+
       bedsData.add([
         bedMap['name'] ?? 'Unknown Bed',
         assignedSnap.docs.length.toString(),
-        bedMap['isWorking'] == true ? 'Working' : 'Not Working',
+        (bedMap['isWorking'] == true ? 'Working 🟢' : 'Not Working 🔴'),
       ]);
     }
 
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       build: (context) => [
-        pw.Center(child: pw.Text("Beds Utilization Report", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
-        pw.Center(child: pw.Text("Date: ${_formatDate(_selectedDate)}")),
-        pw.SizedBox(height: 15),
-        pw.TableHelper.fromTextArray(
-          context: context,
-          headers: ['Bed Name', 'Assigned Appointments', 'Status'],
-          data: bedsData,
-          cellAlignment: pw.Alignment.centerLeft,
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
-          columnWidths: {0: const pw.FlexColumnWidth(3), 1: const pw.FlexColumnWidth(2), 2: const pw.FlexColumnWidth(1.5)},
-          cellPadding: const pw.EdgeInsets.all(8),
-        ),
+        pw.Center(child: pw.Text("BEDS UTILIZATION REPORT", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
+        pw.Center(child: pw.Text("Date: ${_formatDate(_selectedDate)}", style: const pw.TextStyle(fontSize: 16))),
+        pw.SizedBox(height: 20),
+
+        // Check if there's data to display
+        if (bedsData.isEmpty)
+          pw.Center(child: pw.Text("No bed data available.", style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey)))
+        else
+          pw.TableHelper.fromTextArray(
+            context: context,
+            headers: ['Bed Name', 'Assigned Appointments', 'Status'],
+            data: bedsData,
+            cellAlignment: pw.Alignment.centerLeft,
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
+            columnWidths: {0: const pw.FlexColumnWidth(3), 1: const pw.FlexColumnWidth(2), 2: const pw.FlexColumnWidth(1.5)},
+            cellPadding: const pw.EdgeInsets.all(8),
+          ),
       ],
     ));
 
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
+  /// Prints the Daily Appointments Report for the selected date.
   Future<void> _printAppointmentsReport() async {
     final pdf = pw.Document();
     final appsSnap = await FirebaseFirestore.instance
@@ -297,42 +337,49 @@ class _ReportsPageState extends State<ReportsPage> {
         .orderBy('slot')
         .get();
 
-    final futures = appsSnap.docs.map((a) async {
+    final data = await Future.wait(appsSnap.docs.map((a) async {
       final ad = a.data() as Map<String, dynamic>;
-      final patientName = await _fetchUserName(ad['patientId']);
-      final bedName = await _fetchBedName(ad['bedId']);
+      // Fetch patient and bed name concurrently and wait for results
+      final details = await Future.wait([
+        _fetchUserName(ad['patientId']),
+        _fetchBedName(ad['bedId'])
+      ]);
+
       return [
-        patientName,
+        details[0], // Patient Name
         ad['slot'] ?? 'N/A',
-        bedName,
+        details[1], // Bed Name
         ad['status'] ?? 'N/A',
       ];
-    }).toList();
-
-    final data = await Future.wait(futures);
+    }));
 
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4.landscape,
       build: (context) => [
-        pw.Center(child: pw.Text("Daily Appointment Report", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
-        pw.Center(child: pw.Text("Date: ${_formatDate(_selectedDate)}")),
-        pw.SizedBox(height: 15),
-        pw.TableHelper.fromTextArray(
-          context: context,
-          headers: ['Patient Full Name', 'Slot', 'Bed Name', 'Status'],
-          data: data,
-          cellAlignment: pw.Alignment.centerLeft,
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
-          columnWidths: {0: const pw.FlexColumnWidth(3), 1: const pw.FlexColumnWidth(1.5), 2: const pw.FlexColumnWidth(2), 3: const pw.FlexColumnWidth(1.5)},
-          cellPadding: const pw.EdgeInsets.all(8),
-        ),
+        pw.Center(child: pw.Text("DAILY APPOINTMENT REPORT", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
+        pw.Center(child: pw.Text("Date: ${_formatDate(_selectedDate)}", style: const pw.TextStyle(fontSize: 16))),
+        pw.SizedBox(height: 20),
+
+        if (data.isEmpty)
+          pw.Center(child: pw.Text("No appointments found for this date.", style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey)))
+        else
+          pw.TableHelper.fromTextArray(
+            context: context,
+            headers: ['Patient Full Name', 'Slot', 'Assigned Bed', 'Status'],
+            data: data,
+            cellAlignment: pw.Alignment.centerLeft,
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
+            columnWidths: {0: const pw.FlexColumnWidth(3), 1: const pw.FlexColumnWidth(1.5), 2: const pw.FlexColumnWidth(2), 3: const pw.FlexColumnWidth(1.5)},
+            cellPadding: const pw.EdgeInsets.all(8),
+          ),
       ],
     ));
 
     await Printing.layoutPdf(onLayout: (format) async => pdf.save());
   }
 
+  /// Prints the Patient Contact Directory Report.
   Future<void> _printPatientsReport() async {
     final pdf = pw.Document();
     final patientsSnap = await FirebaseFirestore.instance
@@ -353,18 +400,22 @@ class _ReportsPageState extends State<ReportsPage> {
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       build: (context) => [
-        pw.Center(child: pw.Text("Patient Contact Directory", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
-        pw.SizedBox(height: 15),
-        pw.TableHelper.fromTextArray(
-          context: context,
-          headers: ['Full Name', 'Email Address', 'Contact Number'],
-          data: data,
-          cellAlignment: pw.Alignment.centerLeft,
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
-          columnWidths: {0: const pw.FlexColumnWidth(2.5), 1: const pw.FlexColumnWidth(3.5), 2: const pw.FlexColumnWidth(2)},
-          cellPadding: const pw.EdgeInsets.all(8),
-        ),
+        pw.Center(child: pw.Text("PATIENT CONTACT DIRECTORY", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold))),
+        pw.SizedBox(height: 20),
+
+        if (data.isEmpty)
+          pw.Center(child: pw.Text("No patient records found.", style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey)))
+        else
+          pw.TableHelper.fromTextArray(
+            context: context,
+            headers: ['Full Name', 'Email Address', 'Contact Number'],
+            data: data,
+            cellAlignment: pw.Alignment.centerLeft,
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.indigo900),
+            columnWidths: {0: const pw.FlexColumnWidth(2.5), 1: const pw.FlexColumnWidth(3.5), 2: const pw.FlexColumnWidth(2)},
+            cellPadding: const pw.EdgeInsets.all(8),
+          ),
       ],
     ));
 

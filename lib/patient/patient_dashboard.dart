@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:convert'; // Required for Base64 decoding (base64Decode)
+import 'dart:convert';
 
-import 'appointment_page.dart';
-import 'book_page.dart' as booking;
-import 'notification_page.dart';
-import 'profile_page.dart';
-import 'home_page.dart';
-import '../screens/login_page.dart';
-import 'package:dialysis_app/reports/report_page.dart';
+import 'appointment_page.dart'; // Ensure this exists
+import 'book_page.dart' as booking; // Ensure this exists
+import 'notification_page.dart'; // Ensure this exists
+import 'profile_page.dart'; // Ensure this exists
+import 'home_page.dart'; // Ensure this exists
+import '../screens/login_page.dart'; // Ensure this exists
+import 'package:dialysis_app/reports/report_page.dart'; // Ensure this exists
 
 class PatientDashboard extends StatefulWidget {
   final String userId;
@@ -23,13 +23,11 @@ class PatientDashboard extends StatefulWidget {
 class _PatientDashboardState extends State<PatientDashboard> {
   int _index = 0;
   String _username = '';
-  String _userEmail = ''; // To store the user's email
+  String _userEmail = '';
   bool _loadingName = true;
   late final List<Widget> _pages;
   late final String _patientId;
-  int _unreadNotifications = 0; // State variable to hold the unread count
-
-  // State for Base64 image to display in the sidebar
+  int _unreadNotifications = 0;
   String? _profileImageBase64;
 
   final List<String> _titles = [
@@ -45,25 +43,24 @@ class _PatientDashboardState extends State<PatientDashboard> {
   void initState() {
     super.initState();
     _patientId = widget.userId;
-    // Get email from current Firebase user
     _userEmail = FirebaseAuth.instance.currentUser?.email ?? 'N/A';
 
-    // Initialize all pages with either the component or a temporary placeholder
+    // Initialize the pages list (will be fully updated in _loadUsername)
     _pages = [
-      const Center(child: CircularProgressIndicator()),
+      // FIX 1: Initializing HomePage with the navigation callback here is not ideal
+      const Center(child: CircularProgressIndicator()), // Placeholder for Home (Index 0)
       PatientAppointmentsPage(userId: _patientId),
-      const Center(child: CircularProgressIndicator()),
+      const Center(child: CircularProgressIndicator()), // Placeholder for Book (Index 2)
       ProfilePage(userId: _patientId),
       PatientNotificationPage(userId: _patientId),
       ReportsPage(role: "patient", userId: _patientId),
     ];
 
     _loadUsername();
-    // Start listening for unread notifications immediately
     _listenUnreadNotifications();
   }
 
-  /// Fetches the user's name, verification status, and profile image from Firestore.
+  /// Fetches user data and initializes the dynamic pages (Home and Book).
   Future<void> _loadUsername() async {
     bool isVerified = false;
     String name = '';
@@ -79,21 +76,24 @@ class _PatientDashboardState extends State<PatientDashboard> {
         final data = doc.data()!;
         name = (data['username'] ?? data['fullName'] ?? '').toString();
         isVerified = data['verified'] == true;
-
-        // Fetch Base64 image data
         base64Image = data['profileImageBase64'];
       }
     } catch (_) {
-      name = ''; // Keep name empty on error
+      name = '';
     } finally {
       if (mounted) {
         setState(() {
           _username = name;
-          _profileImageBase64 = base64Image; // Update state with Base64 image data
+          _profileImageBase64 = base64Image;
           _loadingName = false;
-          _pages[0] = HomePage(username: _username);
 
-          // Conditionally update the Book page based on verification status
+          // FIX 2: Re-initialize Home Page (Index 0) and pass the onTap function as the callback
+          _pages[0] = HomePage(
+              username: _username,
+              onNavigate: _onTap // PASS THE NAVIGATION FUNCTION
+          );
+
+          // Conditionally update the Book page (Index 2) based on verification status
           _pages[2] = isVerified
               ? SafeArea(child: booking.BookPage(userId: _patientId))
               : const Center(
@@ -112,13 +112,10 @@ class _PatientDashboardState extends State<PatientDashboard> {
     }
   }
 
-  /// Sets up a real-time listener to count unread notifications for the current patient.
   void _listenUnreadNotifications() {
     FirebaseFirestore.instance
         .collection('notifications')
-    // Filter: Only notifications targeted at this patient
         .where('patientId', isEqualTo: _patientId)
-    // Filter: Only notifications that have not been read
         .where('read', isEqualTo: false)
         .snapshots()
         .listen((snapshot) {
@@ -139,8 +136,10 @@ class _PatientDashboardState extends State<PatientDashboard> {
     );
   }
 
+  // Navigation handler (remains the same)
   void _onTap(int idx) => setState(() => _index = idx);
 
+  // ... (rest of the build method is unchanged)
   @override
   Widget build(BuildContext context) {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
@@ -181,9 +180,8 @@ class _PatientDashboardState extends State<PatientDashboard> {
           items: [
             const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
             const BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: "Appointments"),
-            const BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), label: "Book"),
+            BottomNavigationBarItem(icon: const Icon(Icons.add_circle_outline), label: "Book"),
             const BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
-            // Notification Item with Badge
             BottomNavigationBarItem(
               icon: Stack(
                 clipBehavior: Clip.none,
@@ -234,13 +232,11 @@ class _PatientDashboardState extends State<PatientDashboard> {
       backgroundColor: Colors.grey[100],
       body: Row(
         children: [
-          // Sidebar Container (240px width, white background)
           Container(
             width: 240,
             color: Colors.white,
             child: Column(
               children: [
-                // Logo and Clinic Name Header
                 Container(
                   padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10),
                   child: Column(
@@ -283,7 +279,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
                     username: _username,
                     email: _userEmail,
                     isLoading: _loadingName,
-                    profileImageBase64: _profileImageBase64, // PASS THE BASE64 IMAGE DATA
+                    profileImageBase64: _profileImageBase64,
                   ),
                 ),
                 const Divider(),
@@ -292,14 +288,13 @@ class _PatientDashboardState extends State<PatientDashboard> {
                 _WebNavItem(icon: Icons.calendar_today_outlined, label: "Appointments", index: 1, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.add_box_outlined, label: "Book", index: 2, currentIndex: _index, onTap: _onTap),
                 _WebNavItem(icon: Icons.person_outline, label: "Profile", index: 3, currentIndex: _index, onTap: _onTap),
-                // Notification Item with Badge
                 _WebNavItem(
                     icon: Icons.notifications_none,
                     label: "Notifications",
                     index: 4,
                     currentIndex: _index,
                     onTap: _onTap,
-                    badgeCount: _unreadNotifications // Pass the unread count here
+                    badgeCount: _unreadNotifications
                 ),
                 _WebNavItem(icon: Icons.bar_chart_outlined, label: "History", index: 5, currentIndex: _index, onTap: _onTap),
                 const Spacer(),
@@ -330,30 +325,29 @@ class _PatientDashboardState extends State<PatientDashboard> {
   }
 }
 
+// ... (Rest of the supporting widgets: _PatientInfoCard, _WebNavItem)
+// (Since these were not modified, they should remain as you provided them.)
+
 // === WIDGET: Patient Info Card (UPDATED to handle Base64 image) ===
 class _PatientInfoCard extends StatelessWidget {
   final String username;
   final String email;
   final bool isLoading;
-  final String? profileImageBase64; // NEW: Added parameter for Base64 image
+  final String? profileImageBase64;
 
   const _PatientInfoCard({
     required this.username,
     required this.email,
     required this.isLoading,
-    this.profileImageBase64, // NEW
+    this.profileImageBase64,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Determine the name to display (show email if username isn't loaded yet)
     final displayName = isLoading ? 'Loading...' : (username.isNotEmpty ? username : email);
-
-    // Determine the widget to display for the profile picture
     Widget profileWidget;
 
     if (isLoading) {
-      // Loading state
       profileWidget = const Center(
         child: SizedBox(
           width: 20,
@@ -365,7 +359,6 @@ class _PatientInfoCard extends StatelessWidget {
         ),
       );
     } else if (profileImageBase64 != null && profileImageBase64!.isNotEmpty) {
-      // Image available (Base64) - Decode and display
       try {
         final imageBytes = base64Decode(profileImageBase64!);
         profileWidget = ClipRRect(
@@ -378,7 +371,6 @@ class _PatientInfoCard extends StatelessWidget {
           ),
         );
       } catch (e) {
-        // Fallback on decoding error
         profileWidget = const Icon(
           Icons.error,
           color: Colors.white,
@@ -386,14 +378,12 @@ class _PatientInfoCard extends StatelessWidget {
         );
       }
     } else {
-      // Default icon fallback (No image available)
       profileWidget = const Icon(
         Icons.person,
         color: Colors.white,
         size: 28,
       );
     }
-
 
     return Card(
       elevation: 0,
@@ -403,7 +393,6 @@ class _PatientInfoCard extends StatelessWidget {
         padding: const EdgeInsets.all(12.0),
         child: Row(
           children: [
-            // Profile Icon/Placeholder/Image Container
             Container(
               width: 48,
               height: 48,
@@ -411,10 +400,9 @@ class _PatientInfoCard extends StatelessWidget {
                 color: Colors.green.shade300,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: profileWidget, // Use the determined profile widget
+              child: profileWidget,
             ),
             const SizedBox(width: 12),
-            // Name and Email
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -453,7 +441,7 @@ class _WebNavItem extends StatelessWidget {
   final int index;
   final int currentIndex;
   final void Function(int) onTap;
-  final int badgeCount; // Accepts the unread count
+  final int badgeCount;
 
   const _WebNavItem({
     required this.icon,
@@ -472,7 +460,6 @@ class _WebNavItem extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           Icon(icon, color: isSelected ? Colors.green : Colors.black54),
-          // Conditionally display the badge if there are unread notifications AND it's the notification tab (index 4)
           if (badgeCount > 0 && index == 4)
             Positioned(
               right: -4,
@@ -481,7 +468,6 @@ class _WebNavItem extends StatelessWidget {
                 padding: const EdgeInsets.all(4),
                 decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
                 child: Text(
-                  // Display the count
                   '$badgeCount',
                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                 ),
