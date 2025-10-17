@@ -4,13 +4,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
-import 'appointment_page.dart'; // Ensure this exists
-import 'book_page.dart' as booking; // Ensure this exists
-import 'notification_page.dart'; // Ensure this exists
-import 'profile_page.dart'; // Ensure this exists
-import 'home_page.dart'; // Ensure this exists
-import '../screens/login_page.dart'; // Ensure this exists
-import 'package:dialysis_app/reports/report_page.dart'; // Ensure this exists
+import 'appointment_page.dart';
+import 'book_page.dart' as booking;
+import 'notification_page.dart';
+import 'profile_page.dart';
+import 'home_page.dart';
+import '../screens/login_page.dart';
+import 'package:dialysis_app/reports/report_page.dart';
 
 class PatientDashboard extends StatefulWidget {
   final String userId;
@@ -45,12 +45,10 @@ class _PatientDashboardState extends State<PatientDashboard> {
     _patientId = widget.userId;
     _userEmail = FirebaseAuth.instance.currentUser?.email ?? 'N/A';
 
-    // Initialize the pages list (will be fully updated in _loadUsername)
     _pages = [
-      // FIX 1: Initializing HomePage with the navigation callback here is not ideal
-      const Center(child: CircularProgressIndicator()), // Placeholder for Home (Index 0)
+      const Center(child: CircularProgressIndicator()),
       PatientAppointmentsPage(userId: _patientId),
-      const Center(child: CircularProgressIndicator()), // Placeholder for Book (Index 2)
+      const Center(child: CircularProgressIndicator()),
       ProfilePage(userId: _patientId),
       PatientNotificationPage(userId: _patientId),
       ReportsPage(role: "patient", userId: _patientId),
@@ -60,17 +58,14 @@ class _PatientDashboardState extends State<PatientDashboard> {
     _listenUnreadNotifications();
   }
 
-  /// Fetches user data and initializes the dynamic pages (Home and Book).
   Future<void> _loadUsername() async {
     bool isVerified = false;
     String name = '';
     String? base64Image;
 
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_patientId)
-          .get();
+      final doc =
+      await FirebaseFirestore.instance.collection('users').doc(_patientId).get();
 
       if (doc.exists && doc.data() != null) {
         final data = doc.data()!;
@@ -87,13 +82,12 @@ class _PatientDashboardState extends State<PatientDashboard> {
           _profileImageBase64 = base64Image;
           _loadingName = false;
 
-          // FIX 2: Re-initialize Home Page (Index 0) and pass the onTap function as the callback
           _pages[0] = HomePage(
-              username: _username,
-              onNavigate: _onTap // PASS THE NAVIGATION FUNCTION
+            userId: _patientId,
+            fullName: _username,
+            onNavigate: _onTap,
           );
 
-          // Conditionally update the Book page (Index 2) based on verification status
           _pages[2] = isVerified
               ? SafeArea(child: booking.BookPage(userId: _patientId))
               : const Center(
@@ -136,18 +130,16 @@ class _PatientDashboardState extends State<PatientDashboard> {
     );
   }
 
-  // Navigation handler (remains the same)
   void _onTap(int idx) => setState(() => _index = idx);
 
-  // ... (rest of the build method is unchanged)
   @override
   Widget build(BuildContext context) {
     final isWideScreen = MediaQuery.of(context).size.width >= 900;
 
+    // 📱 MOBILE LAYOUT
     if (!isWideScreen) {
-      // Mobile version
       return Scaffold(
-        backgroundColor: Colors.grey[100],
+        backgroundColor: Colors.white,
         appBar: AppBar(
           title: Text(_titles[_index]),
           backgroundColor: Colors.green,
@@ -162,13 +154,9 @@ class _PatientDashboardState extends State<PatientDashboard> {
           ],
         ),
         body: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.white, Colors.lightGreen],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
+          width: double.infinity,
+          height: double.infinity,
+          color: Colors.white, // ✅ solid white background
           child: _pages[_index],
         ),
         bottomNavigationBar: BottomNavigationBar(
@@ -179,8 +167,10 @@ class _PatientDashboardState extends State<PatientDashboard> {
           unselectedItemColor: Colors.grey,
           items: [
             const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-            const BottomNavigationBarItem(icon: Icon(Icons.calendar_today), label: "Appointments"),
-            BottomNavigationBarItem(icon: const Icon(Icons.add_circle_outline), label: "Book"),
+            const BottomNavigationBarItem(
+                icon: Icon(Icons.calendar_today), label: "Appointments"),
+            const BottomNavigationBarItem(
+                icon: Icon(Icons.add_circle_outline), label: "Book"),
             const BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
             BottomNavigationBarItem(
               icon: Stack(
@@ -198,20 +188,23 @@ class _PatientDashboardState extends State<PatientDashboard> {
                           color: Colors.red,
                           shape: BoxShape.circle,
                         ),
-                        constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                        constraints:
+                        const BoxConstraints(minWidth: 20, minHeight: 20),
                         child: Center(
                           child: AnimatedSwitcher(
                             duration: const Duration(milliseconds: 300),
-                            transitionBuilder: (child, animation) =>
-                                ScaleTransition(scale: animation, child: child),
+                            transitionBuilder:
+                                (child, animation) => ScaleTransition(
+                              scale: animation,
+                              child: child,
+                            ),
                             child: Text(
                               '$_unreadNotifications',
                               key: ValueKey<int>(_unreadNotifications),
                               style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold),
                             ),
                           ),
                         ),
@@ -221,35 +214,36 @@ class _PatientDashboardState extends State<PatientDashboard> {
               ),
               label: "Notifications",
             ),
-            const BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: "History"),
+            const BottomNavigationBarItem(
+                icon: Icon(Icons.bar_chart), label: "History"),
           ],
         ),
       );
     }
 
-    // Web version with modern sidebar
+    // 💻 WEB LAYOUT
     return Scaffold(
-      backgroundColor: Colors.grey[100],
+      backgroundColor: Colors.white,
       body: Row(
         children: [
+          // ✅ Left sidebar
           Container(
             width: 240,
             color: Colors.white,
             child: Column(
               children: [
                 Container(
-                  padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10),
+                  padding: const EdgeInsets.all(10),
                   child: Column(
                     children: [
                       Image.asset(
-                        kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png',
+                        kIsWeb
+                            ? 'logo/TCDC-LOGO.png'
+                            : 'assets/logo/TCDC-LOGO.png',
                         height: 100,
-                        errorBuilder: (context, error, stackTrace) {
-                          return const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.medical_services, size: 50, color: Colors.green),
-                          );
-                        },
+                        errorBuilder: (context, error, stackTrace) =>
+                        const Icon(Icons.medical_services,
+                            size: 50, color: Colors.green),
                       ),
                       const SizedBox(height: 4),
                       const Text(
@@ -272,9 +266,9 @@ class _PatientDashboardState extends State<PatientDashboard> {
                   ),
                 ),
                 const Divider(),
-                // Patient Info Card
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10.0, vertical: 8.0),
                   child: _PatientInfoCard(
                     username: _username,
                     email: _userEmail,
@@ -283,39 +277,61 @@ class _PatientDashboardState extends State<PatientDashboard> {
                   ),
                 ),
                 const Divider(),
-                // Navigation Items
-                _WebNavItem(icon: Icons.home_filled, label: "Home", index: 0, currentIndex: _index, onTap: _onTap),
-                _WebNavItem(icon: Icons.calendar_today_outlined, label: "Appointments", index: 1, currentIndex: _index, onTap: _onTap),
-                _WebNavItem(icon: Icons.add_box_outlined, label: "Book", index: 2, currentIndex: _index, onTap: _onTap),
-                _WebNavItem(icon: Icons.person_outline, label: "Profile", index: 3, currentIndex: _index, onTap: _onTap),
+                _WebNavItem(
+                    icon: Icons.home_filled,
+                    label: "Home",
+                    index: 0,
+                    currentIndex: _index,
+                    onTap: _onTap),
+                _WebNavItem(
+                    icon: Icons.calendar_today_outlined,
+                    label: "Appointments",
+                    index: 1,
+                    currentIndex: _index,
+                    onTap: _onTap),
+                _WebNavItem(
+                    icon: Icons.add_box_outlined,
+                    label: "Book",
+                    index: 2,
+                    currentIndex: _index,
+                    onTap: _onTap),
+                _WebNavItem(
+                    icon: Icons.person_outline,
+                    label: "Profile",
+                    index: 3,
+                    currentIndex: _index,
+                    onTap: _onTap),
                 _WebNavItem(
                     icon: Icons.notifications_none,
                     label: "Notifications",
                     index: 4,
                     currentIndex: _index,
                     onTap: _onTap,
-                    badgeCount: _unreadNotifications
-                ),
-                _WebNavItem(icon: Icons.bar_chart_outlined, label: "History", index: 5, currentIndex: _index, onTap: _onTap),
+                    badgeCount: _unreadNotifications),
+                _WebNavItem(
+                    icon: Icons.bar_chart_outlined,
+                    label: "History",
+                    index: 5,
+                    currentIndex: _index,
+                    onTap: _onTap),
                 const Spacer(),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.black),
-                  title: const Text("Logout", style: TextStyle(color: Colors.black)),
+                  title: const Text("Logout",
+                      style: TextStyle(color: Colors.black)),
                   onTap: _logout,
                 ),
               ],
             ),
           ),
+
+          // ✅ Main content (no green gradient)
           Expanded(
             child: Container(
+              width: double.infinity,
+              height: double.infinity,
+              color: Colors.white, // solid white background
               padding: const EdgeInsets.all(24),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.white, Colors.lightGreen],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
               child: _pages[_index],
             ),
           ),
@@ -325,10 +341,7 @@ class _PatientDashboardState extends State<PatientDashboard> {
   }
 }
 
-// ... (Rest of the supporting widgets: _PatientInfoCard, _WebNavItem)
-// (Since these were not modified, they should remain as you provided them.)
-
-// === WIDGET: Patient Info Card (UPDATED to handle Base64 image) ===
+// --- Supporting Widgets ---
 class _PatientInfoCard extends StatelessWidget {
   final String username;
   final String email;
@@ -344,45 +357,29 @@ class _PatientInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayName = isLoading ? 'Loading...' : (username.isNotEmpty ? username : email);
+    final displayName =
+    isLoading ? 'Loading...' : (username.isNotEmpty ? username : email);
     Widget profileWidget;
 
     if (isLoading) {
       profileWidget = const Center(
-        child: SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(
-            color: Colors.white,
-            strokeWidth: 2,
-          ),
-        ),
-      );
+          child: SizedBox(
+              width: 20,
+              height: 20,
+              child:
+              CircularProgressIndicator(color: Colors.white, strokeWidth: 2)));
     } else if (profileImageBase64 != null && profileImageBase64!.isNotEmpty) {
       try {
         final imageBytes = base64Decode(profileImageBase64!);
         profileWidget = ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.memory(
-            imageBytes,
-            fit: BoxFit.cover,
-            width: 48,
-            height: 48,
-          ),
-        );
+            borderRadius: BorderRadius.circular(8),
+            child: Image.memory(imageBytes,
+                fit: BoxFit.cover, width: 48, height: 48));
       } catch (e) {
-        profileWidget = const Icon(
-          Icons.error,
-          color: Colors.white,
-          size: 28,
-        );
+        profileWidget = const Icon(Icons.error, color: Colors.white, size: 28);
       }
     } else {
-      profileWidget = const Icon(
-        Icons.person,
-        color: Colors.white,
-        size: 28,
-      );
+      profileWidget = const Icon(Icons.person, color: Colors.white, size: 28);
     }
 
     return Card(
@@ -394,36 +391,27 @@ class _PatientInfoCard extends StatelessWidget {
         child: Row(
           children: [
             Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: Colors.green.shade300,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: profileWidget,
-            ),
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                    color: Colors.green.shade300,
+                    borderRadius: BorderRadius.circular(8)),
+                child: profileWidget),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    displayName,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green.shade800,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    email,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.black54,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(displayName,
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade800),
+                      overflow: TextOverflow.ellipsis),
+                  Text(email,
+                      style:
+                      const TextStyle(fontSize: 12, color: Colors.black54),
+                      overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
@@ -434,7 +422,6 @@ class _PatientInfoCard extends StatelessWidget {
   }
 }
 
-// === WIDGET: Navigation Item ===
 class _WebNavItem extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -466,16 +453,21 @@ class _WebNavItem extends StatelessWidget {
               top: -4,
               child: Container(
                 padding: const EdgeInsets.all(4),
-                decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                child: Text(
-                  '$badgeCount',
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                ),
+                decoration: const BoxDecoration(
+                    color: Colors.red, shape: BoxShape.circle),
+                child: Text('$badgeCount',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold)),
               ),
             ),
         ],
       ),
-      title: Text(label, style: TextStyle(color: isSelected ? Colors.green : Colors.black54)),
+      title: Text(label,
+          style: TextStyle(
+              color: isSelected ? Colors.green : Colors.black54,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
       selected: isSelected,
       onTap: () => onTap(index),
     );

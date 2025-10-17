@@ -1,11 +1,22 @@
+// nurse_appointments_page.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 // -----------------------------------------------------------------
-// 1. HELPER CLASSES AND FUNCTIONS (OUTSIDE STATE CLASS)
+// CONFIG
 // -----------------------------------------------------------------
+const int AUTO_MISSED_HOURS = 2;
+const int CLIENT_PROCESS_INTERVAL_MINUTES = 5; // client-side periodic check
+const int AUTO_RESCHEDULE_SEARCH_DAYS = 30; // how far to search for a new slot
+const int DEFAULT_SESSION_DURATION_MINUTES = 60; // fallback
+const int MAX_SLOTS_PER_WINDOW = 16;
+const int MAX_BED_CAPACITY = 4;
 
+// -----------------------------------------------------------------
+// HELPER CLASSES
+// -----------------------------------------------------------------
 class _AppointmentStats {
   final int total;
   final int pending;
@@ -39,7 +50,6 @@ Future<_AppointmentStats> _fetchAppointmentStats() async {
   int total = 0;
 
   for (var doc in docs) {
-    // FIX 1: Safely retrieve data as Map, defaulting to empty map if null
     final data = doc.data() as Map<String, dynamic>? ?? {};
     final status = data['status']?.toString().toLowerCase() ?? '';
 
@@ -79,9 +89,8 @@ Future<_AppointmentStats> _fetchAppointmentStats() async {
 }
 
 // -----------------------------------------------------------------
-// 2. MAIN WIDGET
+// MAIN WIDGET
 // -----------------------------------------------------------------
-
 class NurseAppointmentsPage extends StatefulWidget {
   final String nurseId;
   const NurseAppointmentsPage({super.key, required this.nurseId});
@@ -94,15 +103,15 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
   String _searchQuery = "";
   final Map<String, String> _patientNamesCache = {};
   String _selectedStatusFilter = "All";
+  Timer? _clientProcessorTimer;
 
-  // FIX: Synchronized slots with patient's BookPage
+  // Synchronized with patient's BookPage
   final List<String> _slots = [
     "06:00 - 10:00",
     "10:00 - 14:00",
     "14:00 - 18:00",
     "18:00 - 22:00"
   ];
-
 
   bool _isWideScreen(BuildContext context) => MediaQuery.of(context).size.width >= 900;
 
@@ -119,51 +128,60 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
         return Colors.blue;
       case 'completed':
         return Colors.teal;
+      case 'missed':
+        return Colors.redAccent;
+      case 'showed':
+        return Colors.purple;
       default:
         return Colors.black;
     }
   }
 
-  void _showMessage(String message, {bool isError = false}) {
-    if (!mounted) return;
+  @override
+  void initState() {
+    super.initState();
+    _preloadAllPatientNames();
+    _startClientAutoProcessor();
+    // run once shortly after start to capture immediate items
+    Future.delayed(const Duration(seconds: 2), () => _processDueAutoTasksClient());
+  }
 
-    bool isWideScreen = _isWideScreen(context);
+  @override
+  void dispose() {
+    _clientProcessorTimer?.cancel();
+    super.dispose();
+  }
 
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (!mounted) return;
-      if (isWideScreen) {
-        // Use Dialog on wide screen
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: Text(isError ? "Error" : "Success"),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text("OK"),
-              ),
-            ],
-          ),
-        );
-      } else {
-        // Use SnackBar on narrow screen
-        final snackBar = SnackBar(
-          content: Text(message),
-          backgroundColor: isError ? Colors.red : Colors.green,
-        );
-        ScaffoldMessenger.of(context).showSnackBar(snackBar);
+  // -------------------- Patient name caching --------------------
+  Future<void> _preloadAllPatientNames() async {
+    try {
+      final appointmentsSnap = await FirebaseFirestore.instance.collection('appointments').get();
+
+      final Set<String> patientIds = appointmentsSnap.docs
+          .map((doc) => (doc.data()?['patientId'] as String?))
+          .where((id) => id != null)
+          .toSet()
+          .cast<String>();
+
+      if (patientIds.isEmpty) return;
+
+      for (String id in patientIds) {
+        if (!_patientNamesCache.containsKey(id)) {
+          final doc = await FirebaseFirestore.instance.collection('users').doc(id).get();
+          final name = doc.data()?['fullName'] ?? "Unknown";
+          _patientNamesCache[id] = name;
+        }
       }
-    });
+      if (mounted) setState(() {});
+    } catch (e) {
+      print("Error pre-loading patient names: $e");
+    }
   }
 
   Future<String> _getPatientName(String uid) async {
-    if (_patientNamesCache.containsKey(uid)) {
-      return _patientNamesCache[uid]!;
-    }
+    if (_patientNamesCache.containsKey(uid)) return _patientNamesCache[uid]!;
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-      // FIX 2: Use null-aware access for safety
       final name = doc.data()?['fullName'] ?? "Unknown";
       _patientNamesCache[uid] = name;
       return name;
@@ -177,41 +195,68 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
     return _patientNamesCache[uid] ?? "Unknown";
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _preloadAllPatientNames();
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    final snackBar = SnackBar(content: Text(message), backgroundColor: isError ? Colors.red : Colors.green);
+    ScaffoldMessenger.of(context).showSnackBar(snackBar);
   }
 
-  Future<void> _preloadAllPatientNames() async {
+  // -------------------- STATUS HELPERS --------------------
+
+  DateTime? _slotStartDateTimeFor(Timestamp? dateTs, String? slot) {
+    if (dateTs == null || slot == null) return null;
+    final date = dateTs.toDate();
+    final parts = slot.split('-');
+    if (parts.length != 2) return DateTime(date.year, date.month, date.day);
+    final start = parts[0].trim(); // e.g. "06:00"
     try {
-      final appointmentsSnap = await FirebaseFirestore.instance
-          .collection('appointments')
-          .get();
-
-      final Set<String> patientIds = appointmentsSnap.docs
-          .map((doc) => doc.data()?['patientId'] as String?) // Added ? for data()
-          .where((id) => id != null)
-          .toSet()
-          .cast<String>();
-
-      if (patientIds.isEmpty) return;
-
-      for (String id in patientIds) {
-        if (!_patientNamesCache.containsKey(id)) {
-          final doc = await FirebaseFirestore.instance.collection('users').doc(id).get();
-          // FIX 3: Use null-aware access for safety
-          final name = doc.data()?['fullName'] ?? "Unknown";
-          _patientNamesCache[id] = name;
-        }
-      }
-      if (mounted) setState(() {});
+      final parsed = DateFormat('HH:mm').parse(start);
+      return DateTime(date.year, date.month, date.day, parsed.hour, parsed.minute);
     } catch (e) {
-      print("Error pre-loading patient names: $e");
+      // If parse fails, return start of day
+      return DateTime(date.year, date.month, date.day);
     }
   }
 
+  DateTime? _slotEndDateTimeFor(Timestamp? dateTs, String? slot) {
+    if (dateTs == null || slot == null) return null;
+    final date = dateTs.toDate();
+    final parts = slot.split('-');
+    if (parts.length != 2) return DateTime(date.year, date.month, date.day);
+    final end = parts[1].trim(); // e.g. "10:00"
+    try {
+      final parsed = DateFormat('HH:mm').parse(end);
+      return DateTime(date.year, date.month, date.day, parsed.hour, parsed.minute);
+    } catch (e) {
+      return DateTime(date.year, date.month, date.day);
+    }
+  }
 
+  // -------------------- Compose notification --------------------
+  String _composeNotificationMessage(String status, Map<String, dynamic> appointmentData, Timestamp? date, String? slot) {
+    switch (status) {
+      case "approved":
+        return "✅ Your appointment has been approved. You have been assigned to bed ${appointmentData['bedName'] ?? 'a bed'}.";
+      case "rejected":
+        return "❌ Your appointment has been rejected. Please schedule a new one.";
+      case "completed":
+        return "🎉 Your appointment has been marked as completed. Thank you for using our service.";
+      case "rescheduled":
+        final newDate = date != null ? DateFormat('MMM d, yyyy').format(date.toDate()) : (appointmentData['date'] != null ? DateFormat('MMM d, yyyy').format((appointmentData['date'] as Timestamp).toDate()) : 'a new date');
+        return "📅 Your appointment has been rescheduled to $newDate, Slot: ${slot ?? appointmentData['slot'] ?? 'N/A'}. Please check the new details.";
+      case "removed":
+        return "🗑 Your appointment has been removed. Please contact the clinic for more information.";
+      case "missed":
+        return "⏰ Your appointment was marked as MISSED. We attempted to auto-reschedule it — check your appointments for details.";
+      case "showed":
+        return "👋 Your nurse marked you as showed. Your session is now in progress.";
+      default:
+        return "📅 Your appointment status changed to $status.";
+    }
+  }
+
+  // -------------------- BASIC _updateStatus (nurse manual) --------------------
+  // NOTE: for approve/reschedule auto-assign we use transactional functions below.
   Future<void> _updateStatus(
       String appointmentId,
       String status, {
@@ -223,7 +268,6 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
 
     try {
       final beforeSnap = await firestore.collection('appointments').doc(appointmentId).get();
-      // FIX 4: Safely access data map
       final beforeData = beforeSnap.data() as Map<String, dynamic>? ?? {};
       final String patientId = beforeData['patientId'] ?? '';
       final String? oldBedId = beforeData['bedId'];
@@ -231,6 +275,8 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
       Map<String, dynamic> updateData = {
         'status': status,
         'nurseId': widget.nurseId,
+        'lastUpdatedBy': 'nurse',
+        'lastUpdatedAt': FieldValue.serverTimestamp(),
       };
       if (bedId != null) updateData['bedId'] = bedId;
       if (date != null) updateData['date'] = date;
@@ -238,72 +284,46 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
 
       if (bedId != null && status == 'approved') {
         final bedDoc = await firestore.collection('beds').doc(bedId).get();
-        // FIX 5: Safely check and access bed data
         updateData['bedName'] = bedDoc.data()?['name'] ?? 'a bed';
       } else if (status != 'approved' && oldBedId != null && oldBedId.isNotEmpty) {
-        // Clear bed assignment if rejecting/rescheduling/completing/removing
         updateData.remove('bedId');
         updateData.remove('bedName');
       }
 
-
       await firestore.collection('appointments').doc(appointmentId).update(updateData);
 
-      // Sync patient assignment with beds
+      // sync bed assignment (nurse action) - best-effort (non-transactional)
       try {
-        // Remove patient from old bed
         if (oldBedId != null && oldBedId.isNotEmpty && oldBedId != bedId) {
           await firestore.collection('beds').doc(oldBedId).update({
             'assignedPatients': FieldValue.arrayRemove([patientId]),
           });
         }
-
-        // Add patient to new bed if approved
         if (status == 'approved' && bedId != null) {
           await firestore.collection('beds').doc(bedId).update({
             'assignedPatients': FieldValue.arrayUnion([patientId]),
           });
         }
       } catch (e) {
-        print("Error updating bed status: $e");
+        print("Error updating bed status (nurse): $e");
       }
 
+      // create notification
       final updatedDoc = await firestore.collection('appointments').doc(appointmentId).get();
-      // FIX 6: Safely access data for notification message
       final updatedData = updatedDoc.data() as Map<String, dynamic>? ?? {};
       final updatedPatientId = updatedData['patientId'];
-      String notificationMessage = "";
-
-      switch (status) {
-        case "approved":
-          notificationMessage = "✅ Your appointment has been approved. You have been assigned to bed ${updatedData['bedName'] ?? 'a bed'}.";
-          break;
-        case "rejected":
-          notificationMessage = "❌ Your appointment has been rejected. Please schedule a new one.";
-          break;
-        case "completed":
-          notificationMessage = "🎉 Your appointment has been marked as completed. Thank you for using our service.";
-          break;
-        case "rescheduled":
-          final newDate = date != null ? DateFormat('MMM d, yyyy').format(date.toDate()) : 'a new date';
-          notificationMessage = "📅 Your appointment has been rescheduled to $newDate, Slot: ${slot ?? 'N/A'}. Please check the new details.";
-          break;
-        case "removed":
-          notificationMessage = "🗑 Your appointment has been removed. Please contact the clinic for more information.";
-          break;
-        default:
-          notificationMessage = "📅 Your appointment status changed to $status.";
-      }
-
-      await firestore.collection('notifications').add({
+      final notif = {
         'title': "Appointment Update",
-        'message': notificationMessage,
+        'message': _composeNotificationMessage(status, updatedData, date, slot),
         'userId': updatedPatientId,
         'appointmentId': appointmentId,
         'isRead': false,
         'createdAt': FieldValue.serverTimestamp(),
         'type': 'patient',
-      });
+        'origin': 'nurse',
+      };
+      await firestore.collection('notifications').add(notif);
+
       if (!mounted) return;
       _showMessage("Appointment status updated to $status");
       setState(() {});
@@ -312,32 +332,114 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
     }
   }
 
-  // --- CAPACITY CHECK HELPER ---
+  // -------------------- SYSTEM UPDATE (non-bed or when bedId == null) --------------------
+  Future<void> _systemUpdateStatus(
+      String appointmentId,
+      String status, {
+        String? bedId,
+        Timestamp? date,
+        String? slot,
+        Map<String, dynamic>? extraFields,
+      }) async {
+    final firestore = FirebaseFirestore.instance;
+
+    // If bedId is provided we should do the assign in a transaction
+    if (bedId != null) {
+      // try transactional update and bed assign
+      final ok = await _assignBedAndUpdateAppointmentTransaction(
+        appointmentId,
+        status: status,
+        date: date,
+        slot: slot,
+        preferredBedId: bedId,
+        origin: 'system',
+        extraFields: extraFields,
+      );
+      if (!ok) {
+        print("systemUpdateStatus: transaction failed for appointment $appointmentId with bed $bedId");
+      }
+      return;
+    }
+
+    try {
+      final beforeSnap = await firestore.collection('appointments').doc(appointmentId).get();
+      final beforeData = beforeSnap.data() as Map<String, dynamic>? ?? {};
+      final String patientId = beforeData['patientId'] ?? '';
+      final String? oldBedId = beforeData['bedId'];
+
+      Map<String, dynamic> updateData = {
+        'status': status,
+        'lastUpdatedBy': 'system',
+        'lastUpdatedAt': FieldValue.serverTimestamp(),
+      };
+      if (date != null) updateData['date'] = date;
+      if (slot != null) updateData['slot'] = slot;
+      if (extraFields != null) updateData.addAll(extraFields);
+
+      if (status != 'approved' && oldBedId != null && oldBedId.isNotEmpty) {
+        updateData.remove('bedId');
+        updateData.remove('bedName');
+      }
+
+      await firestore.collection('appointments').doc(appointmentId).update(updateData);
+
+      // sync bed assignment (system) best-effort when bed removed
+      try {
+        if (status != 'approved' && oldBedId != null && oldBedId.isNotEmpty) {
+          await firestore.collection('beds').doc(oldBedId).update({
+            'assignedPatients': FieldValue.arrayRemove([patientId]),
+          });
+        }
+      } catch (e) {
+        print("Error updating bed status (system): $e");
+      }
+
+      // create notification
+      final updatedDoc = await firestore.collection('appointments').doc(appointmentId).get();
+      final updatedData = updatedDoc.data() as Map<String, dynamic>? ?? {};
+      final updatedPatientId = updatedData['patientId'];
+      final notif = {
+        'title': "Appointment Update",
+        'message': _composeNotificationMessage(status, updatedData, date, slot),
+        'userId': updatedPatientId,
+        'appointmentId': appointmentId,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        'type': 'patient',
+        'origin': 'system',
+      };
+      await firestore.collection('notifications').add(notif);
+    } catch (e) {
+      print("System update failed for $appointmentId: $e");
+    }
+  }
+
+  // -------------------- BED COUNTS (for UI & capacity checks) --------------------
+  // Count appointments for the specific date+slot with relevant active statuses.
   Future<Map<String, int>> _fetchBedAssignmentCounts(dynamic dateData, dynamic slotData) async {
-    if (dateData is! Timestamp && dateData is! DateTime || slotData is! String) {
-      return {};
-    }
+    if (dateData == null || slotData == null) return {};
 
-    DateTime date;
+    DateTime targetDate;
     if (dateData is Timestamp) {
-      date = dateData.toDate();
+      targetDate = dateData.toDate();
     } else if (dateData is DateTime) {
-      date = dateData;
+      targetDate = dateData;
     } else {
-      return {};
+      targetDate = DateTime.now();
     }
 
-    // Ensure the timestamp is for the start of the day for consistent query
-    final DateTime dateOnly = DateTime(date.year, date.month, date.day);
-    final Timestamp startOfDay = Timestamp.fromDate(dateOnly);
-    final Timestamp endOfDay = Timestamp.fromDate(dateOnly.add(const Duration(days: 1)));
+    final startOfDay = DateTime(targetDate.year, targetDate.month, targetDate.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    // Active statuses that should occupy bed slots
+    final activeStatuses = ['approved', 'showed', 'in_process', 'rescheduled'];
 
     final snap = await FirebaseFirestore.instance
         .collection('appointments')
-        .where('date', isGreaterThanOrEqualTo: startOfDay)
-        .where('date', isLessThan: endOfDay)
+        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
         .where('slot', isEqualTo: slotData)
-        .where('status', isEqualTo: 'approved') // Only count approved assignments
+        .where('status', whereIn: activeStatuses)
         .get();
 
     final Map<String, int> bedCounts = {};
@@ -345,7 +447,6 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
     for (var doc in snap.docs) {
       final data = doc.data() as Map<String, dynamic>? ?? {};
       final bedId = data['bedId']?.toString();
-
       if (bedId != null && bedId.isNotEmpty) {
         bedCounts[bedId] = (bedCounts[bedId] ?? 0) + 1;
       }
@@ -353,127 +454,235 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
 
     return bedCounts;
   }
-  // --- END CAPACITY CHECK HELPER ---
 
+  // -------------------- Transactional assign & update --------------------
+  // This transaction finds a bed (if preferredBedId null) and atomically:
+  // - verifies capacity (no more than MAX_BED_CAPACITY)
+  // - updates appointment with new status/date/slot/bedId/bedName and lastUpdatedBy=origin
+  // - updates bed.assignedPatients (arrayUnion)
+  // - removes patient from previous bed if applicable
+  Future<bool> _assignBedAndUpdateAppointmentTransaction(
+      String appointmentId, {
+        required String status,
+        Timestamp? date,
+        String? slot,
+        String? preferredBedId,
+        String origin = 'system', // or 'nurse'
+        Map<String, dynamic>? extraFields,
+      }) async {
+    final firestore = FirebaseFirestore.instance;
 
-  // --- ACTION DIALOGS ---
+    try {
+      return await firestore.runTransaction<bool>((tx) async {
+        final apptRef = firestore.collection('appointments').doc(appointmentId);
+        final apptSnap = await tx.get(apptRef);
+        if (!apptSnap.exists) return false;
+        final appt = apptSnap.data() as Map<String, dynamic>? ?? {};
+        final String patientId = appt['patientId'] ?? '';
+        final String? oldBedId = appt['bedId'] as String?;
+        final Timestamp effectiveDate = date ?? (appt['date'] as Timestamp? ?? Timestamp.now());
+        final String effectiveSlot = slot ?? (appt['slot']?.toString() ?? _slots.first);
 
-  Future<void> _approveWithBed(BuildContext context, String appointmentId, dynamic dateData, dynamic slotData) async {
-    String? selectedBedId = null; // Use local variable for dialog state
+        // Determine candidate bed if none provided by checking appointment counts
+        String? bedToAssign = preferredBedId;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setStateSB) {
-          return AlertDialog(
-            title: const Text("Select Bed for Appointment"),
-            content: SizedBox(
-              width: _isWideScreen(context) ? 400 : double.maxFinite,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Date: ${dateData is Timestamp ? DateFormat('MMM d, yyyy').format(dateData.toDate()) : 'N/A'}"),
-                    Text("Slot: ${slotData ?? 'N/A'}"),
-                    const Divider(),
-                    const Text("Available Beds (Capacity: 4/Bed):", style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
+        if (bedToAssign == null) {
+          // get counts per bed for this date+slot
+          final bedCounts = <String,int>{};
+          final DateTime dateOnly = effectiveDate.toDate();
+          final tsStart = Timestamp.fromDate(DateTime(dateOnly.year, dateOnly.month, dateOnly.day));
+          final tsEnd = Timestamp.fromDate(DateTime(dateOnly.year, dateOnly.month, dateOnly.day).add(const Duration(days: 1)));
 
-                    FutureBuilder<Map<String, int>>( // Fetches {bedId: count}
-                      future: _fetchBedAssignmentCounts(dateData, slotData),
-                      builder: (context, assignmentSnap) {
-                        if (assignmentSnap.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator());
-                        }
+          final apptsForDay = await firestore
+              .collection('appointments')
+              .where('date', isGreaterThanOrEqualTo: tsStart)
+              .where('date', isLessThan: tsEnd)
+              .where('slot', isEqualTo: effectiveSlot)
+              .where('status', whereIn: ['approved','showed','in_process','rescheduled'])
+              .get();
 
-                        final bedCounts = assignmentSnap.data ?? {};
+          for (var d in apptsForDay.docs) {
+            final dd = d.data() as Map<String, dynamic>? ?? {};
+            final b = dd['bedId']?.toString();
+            if (b != null && b.isNotEmpty) {
+              bedCounts[b] = (bedCounts[b] ?? 0) + 1;
+            }
+          }
 
-                        return FutureBuilder<QuerySnapshot>(
-                          // Fetch all beds
-                          future: FirebaseFirestore.instance.collection('beds').get(),
-                          builder: (context, bedSnap) {
-                            if (bedSnap.connectionState == ConnectionState.waiting) {
-                              return const Center(child: CircularProgressIndicator());
-                            }
-                            if (!bedSnap.hasData || bedSnap.data!.docs.isEmpty) {
-                              return const Text("No beds found.", style: TextStyle(color: Colors.red));
-                            }
+          // iterate working beds and pick first with capacity
+          // IMPORTANT: order by 'name' to ensure FCFS (Bed 01, Bed 02, ...)
+          final bedsSnap = await firestore.collection('beds').where('isWorking', isEqualTo: true).orderBy('name').get();
+          for (var bdoc in bedsSnap.docs) {
+            final id = bdoc.id;
+            final count = bedCounts[id] ?? 0;
+            if (count < MAX_BED_CAPACITY) {
+              bedToAssign = id;
+              break;
+            }
+          }
+        } else {
+          // if preferred provided, verify capacity first
+          final DateTime dateOnly = effectiveDate.toDate();
+          final tsStart = Timestamp.fromDate(DateTime(dateOnly.year, dateOnly.month, dateOnly.day));
+          final tsEnd = Timestamp.fromDate(DateTime(dateOnly.year, dateOnly.month, dateOnly.day).add(const Duration(days: 1)));
 
-                            final beds = bedSnap.data!.docs;
+          final assignedSnap = await firestore.collection('appointments')
+              .where('date', isGreaterThanOrEqualTo: tsStart)
+              .where('date', isLessThan: tsEnd)
+              .where('slot', isEqualTo: slot ?? appt['slot'])
+              .where('status', whereIn: ['approved','showed','in_process','rescheduled'])
+              .where('bedId', isEqualTo: preferredBedId)
+              .get();
 
-                            return Column(
-                              children: beds.map((doc) {
-                                final bedId = doc.id;
-                                // FIX 7: Safe data retrieval inside FutureBuilder
-                                final bedData = doc.data() as Map<String, dynamic>? ?? {};
-                                final bedName = bedData['name'] ?? 'Bed ID: $bedId';
-                                final assignedCount = bedCounts[bedId] ?? 0;
+          if (assignedSnap.docs.length >= MAX_BED_CAPACITY) {
+            // cannot assign preferred bed
+            bedToAssign = null;
+          }
+        }
 
-                                // CAPACITY CHECK
-                                const int maxCapacityPerBed = 4;
-                                final isFull = assignedCount >= maxCapacityPerBed;
+        // Build appointment update
+        final Map<String, dynamic> updateData = {
+          'status': status,
+          'lastUpdatedBy': origin,
+          'lastUpdatedAt': FieldValue.serverTimestamp(),
+        };
+        if (date != null) updateData['date'] = date;
+        if (slot != null) updateData['slot'] = slot;
+        if (extraFields != null) updateData.addAll(extraFields);
 
-                                return RadioListTile<String>(
-                                  title: Text(bedName),
-                                  subtitle: Text(
-                                    "Assigned: $assignedCount / $maxCapacityPerBed",
-                                    style: TextStyle(color: isFull ? Colors.red : Colors.green),
-                                  ),
-                                  value: bedId,
-                                  groupValue: selectedBedId,
-                                  // Disable if the bed is full
-                                  onChanged: isFull ? null : (value) {
-                                    setStateSB(() {
-                                      selectedBedId = value;
-                                    });
-                                  },
-                                  dense: true,
-                                );
-                              }).toList(),
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-              FutureBuilder<Map<String, int>>(
-                  future: _fetchBedAssignmentCounts(dateData, slotData),
-                  builder: (context, assignmentSnap) {
-                    // Check if the selected bed is still valid (in case user switches)
-                    final bedCounts = assignmentSnap.data ?? {};
-                    const int maxCapacityPerBed = 4;
-                    final isButtonEnabled = selectedBedId != null && (bedCounts[selectedBedId] ?? 0) < maxCapacityPerBed;
+        if (bedToAssign != null) {
+          final bedDoc = await tx.get(firestore.collection('beds').doc(bedToAssign));
+          final bedName = bedDoc.data()?['name'] ?? 'a bed';
+          updateData['bedId'] = bedToAssign;
+          updateData['bedName'] = bedName;
+        } else {
+          // ensure appointment reflects no bed if status not approved
+          if (status != 'approved') {
+            updateData.remove('bedId');
+            updateData.remove('bedName');
+          }
+        }
 
-                    return ElevatedButton(
-                      onPressed: isButtonEnabled
-                          ? () => Navigator.pop(ctx, true)
-                          : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text("Approve"),
-                    );
-                  }
-              ),
-            ],
-          );
-        },
-      ),
-    );
+        // Update appointment
+        tx.update(apptRef, updateData);
 
-    if (confirmed == true && selectedBedId != null) {
-      await _updateStatus(appointmentId, "approved", bedId: selectedBedId);
+        // Update beds atomically: remove from old bed, add to new if applicable
+        if (oldBedId != null && oldBedId.isNotEmpty && oldBedId != bedToAssign) {
+          final oldBedRef = firestore.collection('beds').doc(oldBedId);
+          tx.update(oldBedRef, {
+            'assignedPatients': FieldValue.arrayRemove([patientId]),
+          });
+        }
+        if (bedToAssign != null) {
+          final bedRef = firestore.collection('beds').doc(bedToAssign);
+          tx.update(bedRef, {
+            'assignedPatients': FieldValue.arrayUnion([patientId]),
+          });
+        }
+
+        return true;
+      });
+    } catch (e) {
+      print("assignBedAndUpdateAppointmentTransaction error: $e");
+      return false;
     }
   }
 
-  // --- REFACTORED _rescheduleAppointment to use Tabs ---
+  // -------------------- Find available bed (non-transactional helper) --------------------
+  Future<String?> _findAvailableBedFor(DateTime date, String slot) async {
+    // This helper attempts to find a bed quickly (non-transactional).
+    // The final assignment should still use a transaction to avoid races.
+    final DateTime onlyDate = DateTime(date.year, date.month, date.day);
+    final tsStart = Timestamp.fromDate(onlyDate);
+    final tsEnd = Timestamp.fromDate(onlyDate.add(const Duration(days: 1)));
+
+    // Build counts per bed using appointments
+    final appts = await FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: tsStart)
+        .where('date', isLessThan: tsEnd)
+        .where('slot', isEqualTo: slot)
+        .where('status', whereIn: ['approved','showed','in_process','rescheduled'])
+        .get();
+
+    final Map<String,int> counts = {};
+    for (var d in appts.docs) {
+      final b = (d.data()?['bedId'] as String?) ?? '';
+      if (b.isNotEmpty) counts[b] = (counts[b] ?? 0) + 1;
+    }
+
+    // order beds by name to enforce FCFS (Bed 01 first)
+    final bedsSnap = await FirebaseFirestore.instance.collection('beds').where('isWorking', isEqualTo: true).orderBy('name').get();
+    for (var bdoc in bedsSnap.docs) {
+      final id = bdoc.id;
+      final c = counts[id] ?? 0;
+      if (c < MAX_BED_CAPACITY) return id;
+    }
+    return null;
+  }
+
+  // -------------------- APPROVE FLOW (dialog -> transactional assignment) --------------------
+  Future<void> _approveWithBed(BuildContext context, String appointmentId, dynamic dateData, dynamic slotData) async {
+    // Attempt quick auto-assign first
+    String? candidateBedId;
+    if (dateData is Timestamp && slotData is String) {
+      candidateBedId = await _findAvailableBedFor(dateData.toDate(), slotData);
+    }
+
+    // We still show a dialog to confirm approve action with info, but no bed-selection required.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Approve Appointment"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Approve this appointment? Bed will be assigned automatically if available."),
+            const SizedBox(height: 12),
+            if (candidateBedId == null)
+              const Text("No bed appears available right now. System will try to find one during approval or reschedule.", style: TextStyle(color: Colors.orange)),
+            if (candidateBedId != null)
+              FutureBuilder<DocumentSnapshot>(
+                future: FirebaseFirestore.instance.collection('beds').doc(candidateBedId).get(),
+                builder: (context, snap) {
+                  if (!snap.hasData) return const SizedBox.shrink();
+                  final bed = snap.data!;
+                  final name = (bed.data() as Map<String, dynamic>?)?['name'] ?? 'a bed';
+                  return Text("Auto-selected bed: $name");
+                },
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text("Approve"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      // Use transaction to assign bed and mark approved
+      final ok = await _assignBedAndUpdateAppointmentTransaction(
+        appointmentId,
+        status: 'approved',
+        date: (dateData is Timestamp) ? dateData : null,
+        slot: (slotData is String) ? slotData : null,
+        preferredBedId: candidateBedId,
+        origin: 'nurse',
+      );
+
+      if (!ok) {
+        _showMessage("Could not assign bed (might be full). Appointment approved but bed not assigned.", isError: true);
+        // fallback: try non-transactional update to set status to approved without bed
+        await _updateStatus(appointmentId, 'approved');
+      }
+    }
+  }
+
   Future<void> _rescheduleAppointment(
       BuildContext context,
       String appointmentId,
@@ -484,12 +693,11 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
       String? oldBedId,
       ) async {
 
-    // Initial values
     DateTime initialDate = oldDateData is Timestamp ? oldDateData.toDate() : DateTime.now();
     String? initialSlot = oldSlot?.trim();
     String? initialBedId = oldBedId;
 
-    // Use a Tabbed Dialog for the Reschedule process
+    // Pass a wrapper to the dialog so the dialog only chooses date+slot.
     await showDialog(
       context: context,
       builder: (ctx) => RescheduleDialog(
@@ -499,14 +707,29 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
         initialDate: initialDate,
         initialSlot: initialSlot,
         initialBedId: initialBedId,
-        onConfirm: _updateStatus,
         slots: _slots,
         isWideScreen: _isWideScreen(context),
-        fetchBedAssignmentCounts: _fetchBedAssignmentCounts, // Pass the helper function
+        onConfirm: (String apptId, String newStatus, {String? bedId, Timestamp? date, String? slot}) async {
+          // When reschedule dialog confirms, run transactional reschedule+assign
+          final ok = await _assignBedAndUpdateAppointmentTransaction(
+            apptId,
+            status: newStatus, // expected "rescheduled" or "approved" if bed assigned
+            date: date,
+            slot: slot,
+            preferredBedId: null, // let system choose bed
+            origin: 'nurse',
+          );
+          if (!ok) {
+            // fallback to non-transactional reschedule update
+            await _updateStatus(apptId, newStatus, date: date, slot: slot);
+          }
+        },
+        //slots: _slots,
+        //isWideScreen: _isWideScreen(context),
+        fetchBedAssignmentCounts: _fetchBedAssignmentCounts,
       ),
     );
   }
-
 
   Future<void> _confirmAction(BuildContext context, String action, Function onConfirm) async {
     final confirmed = await showDialog<bool>(
@@ -519,7 +742,6 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
-              // Use a specific color for 'Remove'
               backgroundColor: action == "Approve" || action == "Complete" ? Colors.green : (action == "Remove" ? Colors.black54 : Colors.red),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -532,135 +754,69 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
     if (confirmed == true) await onConfirm();
   }
 
-
-  // --- UI WIDGETS ---
-
+  // -------------------- UI --------------------
   Widget _buildStatCards(BuildContext context) {
     return FutureBuilder<_AppointmentStats>(
       future: _fetchAppointmentStats(),
       builder: (context, snapshot) {
-        final stats = snapshot.data;
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox(
-            height: 80,
-            child: Center(child: LinearProgressIndicator()),
-          );
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
         }
-
-        final currentStats = snapshot.data ?? _AppointmentStats(total: 0, pending: 0, approved: 0, rescheduled: 0, rejected: 0, completed: 0);
-
-        final List<Map<String, dynamic>> statCards = [
-          {"label": "Total", "count": currentStats.total, "color": Colors.blueGrey, "icon": Icons.list_alt},
-          {"label": "Pending", "count": currentStats.pending, "color": Colors.orange, "icon": Icons.pending},
-          {"label": "Approved", "count": currentStats.approved, "color": Colors.green, "icon": Icons.check_circle},
-          {"label": "Completed", "count": currentStats.completed, "color": Colors.teal, "icon": Icons.done_all},
-          {"label": "Rescheduled", "count": currentStats.rescheduled, "color": Colors.blue, "icon": Icons.calendar_month},
-          {"label": "Rejected", "count": currentStats.rejected, "color": Colors.red, "icon": Icons.close},
-        ];
-
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: statCards.map((card) {
-              final Color color = card["color"];
-              final int count = card["count"];
-              final String label = card["label"];
-
-              return Padding(
-                padding: const EdgeInsets.only(right: 12.0),
-                child: GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedStatusFilter = label;
-                      _searchQuery = "";
-                    });
-                  },
-                  child: Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: _selectedStatusFilter == label
-                          ? BorderSide(color: color, width: 2.5)
-                          : BorderSide.none,
-                    ),
-                    child: Container(
-                      width: 150,
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(card["icon"], size: 24, color: color),
-                              const Spacer(),
-                              Text(
-                                count.toString(),
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: color,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            label,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+        final stats = snapshot.data!;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _buildStatCard("Total", stats.total, Colors.blueGrey),
+            _buildStatCard("Pending", stats.pending, Colors.orange),
+            _buildStatCard("Approved", stats.approved, Colors.green),
+            _buildStatCard("Rescheduled", stats.rescheduled, Colors.blue),
+            _buildStatCard("Rejected", stats.rejected, Colors.red),
+            _buildStatCard("Completed", stats.completed, Colors.teal),
+          ],
         );
       },
     );
   }
 
-  Widget _buildFilterButtons() {
-    final List<String> statuses = ["All", "Pending", "Approved", "Rescheduled", "Rejected", "Completed"];
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Wrap(
-        spacing: 8.0,
-        children: statuses.map((status) {
-          final isSelected = _selectedStatusFilter == status;
-          final color = _getStatusColor(status.toLowerCase() == "all" ? "pending" : status.toLowerCase());
-
-          return ChoiceChip(
-            label: Text(status),
-            selected: isSelected,
-            onSelected: (selected) {
-              if (selected) {
-                setState(() {
-                  _selectedStatusFilter = status;
-                  _searchQuery = "";
-                });
-              }
-            },
-            selectedColor: color.withOpacity(0.2),
-            labelStyle: TextStyle(
-              color: isSelected ? color : Colors.black87,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            ),
-            backgroundColor: Colors.grey.shade100,
-            side: isSelected ? BorderSide(color: color, width: 1.5) : BorderSide.none,
-          );
-        }).toList(),
+  Widget _buildStatCard(String title, int count, Color color) {
+    return Card(
+      elevation: 2,
+      color: color.withOpacity(0.1),
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Text(title, style: TextStyle(fontSize: 16, color: color, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(count.toString(), style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
+          ],
+        ),
       ),
     );
   }
 
-  // --- Card Widget with Scrollable Buttons at the bottom (INCLUDES isPast FIX) ---
+  Widget _buildFilterButtons() {
+    final filters = ["All", "Pending", "Approved", "Rescheduled", "Rejected", "Completed", "Missed", "Showed"];
+    return Wrap(
+      spacing: 6,
+      children: filters.map((f) {
+        final selected = _selectedStatusFilter == f;
+        return ChoiceChip(
+          label: Text(f),
+          selected: selected,
+          onSelected: (_) {
+            setState(() => _selectedStatusFilter = f);
+          },
+          selectedColor: Colors.green,
+          labelStyle: TextStyle(color: selected ? Colors.white : Colors.black),
+        );
+      }).toList(),
+    );
+  }
+
+  // Table row widget for narrow view (list-like)
   Widget _buildAppointmentCard({
     required String appointmentId,
     required String patientId,
@@ -671,379 +827,241 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
     required String? bedName,
     required String? oldBedId,
   }) {
-    final date = dateTimestamp?.toDate() ?? DateTime(1970);
-    final statusLower = status.toLowerCase();
-    final statusColor = _getStatusColor(statusLower);
+    final dateStr = dateTimestamp != null
+        ? DateFormat('MMM d, yyyy').format(dateTimestamp.toDate())
+        : "N/A";
 
-    // Status Flags
-    final isPending = statusLower == 'pending';
-    final isApproved = statusLower == 'approved';
-    final isCompleted = statusLower == 'completed';
-    final isRescheduled = statusLower == 'rescheduled';
-    final isRejected = statusLower == 'rejected';
+    final statusColor = _getStatusColor(status);
 
-    // FIX: Check if the appointment date has passed
-    final now = DateTime.now();
-    // Compare dates based on day, month, and year for 'past'
-    final isPast = date.isBefore(DateTime(now.year, now.month, now.day));
-
-
-    // --- Primary Action Buttons ---
-    List<Widget> primaryActions = [];
-
-    if (isPending) {
-      // Pending appointments need to be Approved or Rejected/Rescheduled
-      primaryActions.addAll([
-        ElevatedButton.icon(
-          onPressed: () => _approveWithBed(context, appointmentId, dateTimestamp, slot),
-          icon: const Icon(Icons.check),
-          label: const Text("Approve"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: () => _rescheduleAppointment(context, appointmentId, patientId, patientName, dateTimestamp, slot, oldBedId),
-          icon: const Icon(Icons.calendar_month),
-          label: const Text("Reschedule"),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.blue,
-            side: const BorderSide(color: Colors.blue),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      ]);
-    } else if (isApproved && !isPast) {
-      // Approved appointments in the future can only be rescheduled or rejected
-      primaryActions.addAll([
-        ElevatedButton.icon(
-          onPressed: () => _rescheduleAppointment(context, appointmentId, patientId, patientName, dateTimestamp, slot, oldBedId),
-          icon: const Icon(Icons.calendar_month),
-          label: const Text("Reschedule"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.blue,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      ]);
-    } else if (isApproved && isPast) {
-      // Approved appointments in the past must be marked as Completed
-      primaryActions.add(
-        ElevatedButton.icon(
-          onPressed: () => _confirmAction(context, "Complete", () => _updateStatus(appointmentId, "completed")),
-          icon: const Icon(Icons.done_all),
-          label: const Text("Mark Complete"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.teal,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      );
-    } else if (isRescheduled) {
-      // Rescheduled can be Approved or Rejected (or Rescheduled again)
-      primaryActions.addAll([
-        ElevatedButton.icon(
-          onPressed: () => _approveWithBed(context, appointmentId, dateTimestamp, slot),
-          icon: const Icon(Icons.check),
-          label: const Text("Approve"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: () => _rescheduleAppointment(context, appointmentId, patientId, patientName, dateTimestamp, slot, oldBedId),
-          icon: const Icon(Icons.calendar_month),
-          label: const Text("Re-Reschedule"),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.blue,
-            side: const BorderSide(color: Colors.blue),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-      ]);
-    }
-
-    // --- Secondary Actions (Dropdown Menu) ---
-    final secondaryActions = <PopupMenuEntry<String>>[
-      if (!isRejected && !isCompleted)
-        const PopupMenuItem<String>(
-          value: 'Reject',
-          child: ListTile(
-            leading: Icon(Icons.close, color: Colors.red),
-            title: Text('Reject Appointment'),
-          ),
-        ),
-      const PopupMenuItem<String>(
-        value: 'Remove',
-        child: ListTile(
-          leading: Icon(Icons.delete_forever, color: Colors.black54),
-          title: Text('Remove (Archive)'),
-        ),
-      ),
-      if (isPending || isRescheduled || isApproved)
-        const PopupMenuItem<String>(
-          value: 'Reassign',
-          child: ListTile(
-            leading: Icon(Icons.local_hospital_outlined, color: Colors.indigo),
-            title: Text('Re-Assign Bed'),
-          ),
-        ),
-    ];
-
-    // --- Card UI ---
     return Card(
-      elevation: 4,
-      margin: const EdgeInsets.only(bottom: 16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Row 1: Status and Patient Name
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    status.toUpperCase(),
-                    style: TextStyle(
-                      color: statusColor,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                PopupMenuButton<String>(
-                  onSelected: (String result) async {
-                    switch (result) {
-                      case 'Reject':
-                        await _confirmAction(context, "Reject", () => _updateStatus(appointmentId, "rejected"));
-                        break;
-                      case 'Remove':
-                        await _confirmAction(context, "Remove", () => _updateStatus(appointmentId, "removed"));
-                        break;
-                      case 'Reassign':
-                      // Use the existing approve dialog logic to select a new bed
-                        await _approveWithBed(context, appointmentId, dateTimestamp, slot);
-                        break;
-                    }
-                  },
-                  itemBuilder: (BuildContext context) => secondaryActions,
-                  icon: const Icon(Icons.more_vert, color: Colors.grey),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // Row 2: Patient and Details
-            Text(
-              "Patient: $patientName",
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            // Row 3: Date, Slot, Bed
-            Row(
-              children: [
-                const Icon(Icons.calendar_today, size: 18, color: Colors.grey),
-                const SizedBox(width: 8),
-                Text(
-                  DateFormat('MMM d, yyyy').format(date),
-                  style: const TextStyle(fontSize: 16),
-                ),
-                const SizedBox(width: 20),
-                const Icon(Icons.access_time, size: 18, color: Colors.grey),
-                const SizedBox(width: 8),
-                Text(
-                  slot,
-                  style: const TextStyle(fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(Icons.king_bed_outlined, size: 18, color: isApproved ? Colors.green : Colors.grey),
-                const SizedBox(width: 8),
-                Text(
-                  bedName != null ? "Bed: $bedName" : "Bed: Unassigned",
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: bedName != null ? Colors.black : Colors.red,
-                    fontWeight: bedName != null ? FontWeight.normal : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Divider(height: 1, thickness: 1),
-            const SizedBox(height: 15),
-
-            // --- Action Buttons (Fixed Visibility) ---
-            // Wrapped in a Row for desktop/wide screen, or Wrap for mobile/narrow screen
-            if (primaryActions.isNotEmpty)
-              _isWideScreen(context)
-                  ? Row(
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: primaryActions,
-              )
-                  : Wrap(
-                spacing: 8.0,
-                runSpacing: 8.0,
-                children: primaryActions,
-              ),
-            if (primaryActions.isEmpty)
-              Text(
-                isCompleted || isRejected
-                    ? "No further actions for ${status.toLowerCase()} appointments."
-                    : (isApproved && isPast ? "Action Required: Mark Complete" : "No primary actions available."),
-                style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
-              ),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      elevation: 2,
+      child: ListTile(
+        leading: CircleAvatar(child: Text(patientName.isNotEmpty ? patientName[0].toUpperCase() : "?")),
+        title: Text(patientName, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text("Date: $dateStr • Slot: $slot\nBed: ${bedName ?? 'Unassigned'}"),
+        trailing: PopupMenuButton<String>(
+          onSelected: (value) async {
+            switch (value) {
+              case 'approve':
+                await _approveWithBed(context, appointmentId, dateTimestamp, slot);
+                break;
+              case 'reject':
+                await _confirmAction(context, "Reject", () => _updateStatus(appointmentId, "rejected"));
+                break;
+              case 'reschedule':
+                await _rescheduleAppointment(context, appointmentId, patientId, patientName, dateTimestamp, slot, oldBedId);
+                break;
+              case 'showed':
+                await _updateStatus(appointmentId, "showed");
+                break;
+              case 'missed':
+                await _updateStatus(appointmentId, "missed");
+                break;
+              case 'completed':
+                await _updateStatus(appointmentId, "completed");
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            if (status == 'pending' || status == 'rescheduled')
+              const PopupMenuItem(value: 'approve', child: Text('Approve')),
+            if (status == 'pending' || status == 'approved')
+              const PopupMenuItem(value: 'reject', child: Text('Reject')),
+            const PopupMenuItem(value: 'reschedule', child: Text('Reschedule')),
+            const PopupMenuItem(value: 'showed', child: Text('Mark as Showed')),
+            const PopupMenuItem(value: 'missed', child: Text('Mark as Missed')),
+            const PopupMenuItem(value: 'completed', child: Text('Mark as Completed')),
           ],
         ),
+        tileColor: Colors.white,
       ),
     );
   }
 
-  // --- MAIN BUILD METHOD ---
+  // Table row for wide screens using DataRow
+  DataRow _buildDataRowFromDoc(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    final appointmentId = doc.id;
+    final patientId = data['patientId'] ?? '';
+    final patientName = _getPatientNameSync(patientId);
+    final status = (data['status'] ?? '').toString();
+    final slot = (data['slot'] ?? '').toString();
+    final bedName = data['bedName']?.toString() ?? 'Unassigned';
+    final Timestamp? dateTimestamp = data['date'] as Timestamp?;
+    final dateStr = dateTimestamp != null ? DateFormat('MMM d, yyyy').format(dateTimestamp.toDate()) : 'N/A';
+    final statusColor = _getStatusColor(status);
+
+    return DataRow(cells: [
+      DataCell(Text(patientName)),
+      DataCell(Text(dateStr)),
+      DataCell(Text(slot)),
+      DataCell(Text(bedName)),
+      DataCell(Row(children: [Icon(Icons.circle, size: 10, color: statusColor), const SizedBox(width: 8), Text(status.toUpperCase())])),
+      DataCell(_buildActionButtonsForRow(appointmentId, patientId, patientName, status, dateTimestamp, slot, bedName)),
+    ]);
+  }
+
+  Widget _buildActionButtonsForRow(String appointmentId, String patientId, String patientName, String status, Timestamp? dateTimestamp, String slot, String bedName) {
+    final lower = status.toLowerCase();
+    if (lower == 'pending' || lower == 'rescheduled') {
+      return Row(
+        children: [
+          ElevatedButton(
+            onPressed: () => _approveWithBed(context, appointmentId, dateTimestamp, slot),
+            child: const Text("Approve"),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: () => _confirmAction(context, "Reject", () => _updateStatus(appointmentId, "rejected")),
+            child: const Text("Reject"),
+          ),
+        ],
+      );
+    } else if (lower == 'approved') {
+      return ElevatedButton(
+        onPressed: () => _updateStatus(appointmentId, "showed"),
+        child: const Text("Showed"),
+        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+      );
+    } else {
+      return Text("-", style: TextStyle(color: Colors.grey[600]));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isWide = _isWideScreen(context);
+
     return Scaffold(
+      backgroundColor: Colors.grey[100],
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            const Text(
-              "Appointments Management",
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF4CAF50)),
-            ),
-            const SizedBox(height: 16),
-
-            // Stat Cards (Filter by tapping)
-            _buildStatCards(context),
-            const SizedBox(height: 16),
-
-            // Search and Filter Row
+            // Header + Run button
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Search Field
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(right: _isWideScreen(context) ? 16.0 : 0),
-                    child: TextField(
-                      decoration: InputDecoration(
-                        hintText: "Search by patient name...",
-                        prefixIcon: const Icon(Icons.search),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey.shade100,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 10),
-                      ),
-                      onChanged: (value) {
-                        setState(() {
-                          _searchQuery = value.toLowerCase();
-                        });
-                      },
+                const Text("Appointments", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                Row(
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _processDueAutoTasksClient,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text("Run Auto Processor"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: () => _autoRescheduleMissedAppointments(),
+                      icon: const Icon(Icons.schedule),
+                      label: const Text("Auto-Reschedule Missed"),
+                    ),
+                  ],
                 ),
-                // Filter Buttons (visible on wide screens or if space allows)
-                if (_isWideScreen(context))
-                  SizedBox(width: _isWideScreen(context) ? 400 : 0, child: _buildFilterButtons()),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+            _buildStatCards(context),
+            const SizedBox(height: 12),
 
-            // If not wide screen, show filter buttons below search
-            if (!_isWideScreen(context)) ...[
-              _buildFilterButtons(),
-              const SizedBox(height: 16),
-            ],
+            // Search + Filters row
+            Row(
+              children: [
+                // Search bar
+                Expanded(
+                  flex: isWide ? 2 : 1,
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: "Search by patient name...",
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                    ),
+                    onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Filters
+                Expanded(
+                  flex: isWide ? 3 : 2,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: _buildFilterButtons(),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
 
-            // Appointment List (StreamBuilder)
+            // Appointment list/table
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('appointments')
-                    .where('status', isNotEqualTo: 'removed') // Exclude removed appointments from main view
-                    .snapshots(),
+                stream: FirebaseFirestore.instance.collection('appointments').orderBy('date', descending: false).snapshots(),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                    return const Center(child: Text("No active appointments found."));
-                  }
+                  if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text("No appointments found."));
 
-                  final allAppointments = snapshot.data!.docs;
-
-                  final filteredAppointments = allAppointments.where((doc) {
-                    final data = doc.data() as Map<String, dynamic>? ?? {};
-                    final status = data['status']?.toString().toLowerCase() ?? '';
-                    final patientId = data['patientId']?.toString() ?? 'N/A';
-                    final patientName = _getPatientNameSync(patientId).toLowerCase();
-
-                    // Apply status filter
-                    bool statusMatch = _selectedStatusFilter == "All" ||
-                        status.toLowerCase() == _selectedStatusFilter.toLowerCase();
-
-                    // Apply search filter
-                    bool searchMatch = _searchQuery.isEmpty || patientName.contains(_searchQuery);
-
-                    return statusMatch && searchMatch;
+                  final allDocs = snapshot.data!.docs;
+                  final filteredDocs = allDocs.where((doc) {
+                    final d = doc.data() as Map<String, dynamic>? ?? {};
+                    final status = (d['status'] ?? '').toString();
+                    final patientName = _getPatientNameSync(d['patientId'] ?? '');
+                    final matchesFilter = _selectedStatusFilter == "All" || status.toLowerCase() == _selectedStatusFilter.toLowerCase();
+                    final matchesSearch = _searchQuery.isEmpty || patientName.toLowerCase().contains(_searchQuery.toLowerCase());
+                    return matchesFilter && matchesSearch;
                   }).toList();
 
-                  if (filteredAppointments.isEmpty) {
-                    return Center(
-                        child: Text("No appointments match the current filter and search criteria: '$_selectedStatusFilter' and '$_searchQuery'")
+                  if (filteredDocs.isEmpty) return const Center(child: Text("No matching appointments."));
+
+                  if (isWide) {
+                    return SingleChildScrollView(
+                      child: DataTable(
+                        columnSpacing: 24,
+                        columns: const [
+                          DataColumn(label: Text("Patient")),
+                          DataColumn(label: Text("Date")),
+                          DataColumn(label: Text("Slot")),
+                          DataColumn(label: Text("Bed")),
+                          DataColumn(label: Text("Status")),
+                          DataColumn(label: Text("Actions")),
+                        ],
+                        rows: filteredDocs.map((d) => _buildDataRowFromDoc(d)).toList(),
+                      ),
+                    );
+                  } else {
+                    return ListView.builder(
+                      itemCount: filteredDocs.length,
+                      itemBuilder: (context, idx) {
+                        final doc = filteredDocs[idx];
+                        final data = doc.data() as Map<String, dynamic>? ?? {};
+                        final appointmentId = doc.id;
+                        final patientId = data['patientId'] ?? '';
+                        final patientName = _getPatientNameSync(patientId);
+                        final status = (data['status'] ?? '').toString();
+                        final slot = (data['slot'] ?? '').toString();
+                        final bedName = data['bedName']?.toString();
+                        final bedId = data['bedId']?.toString();
+                        final dateTimestamp = data['date'] as Timestamp?;
+
+                        return _buildAppointmentCard(
+                          appointmentId: appointmentId,
+                          patientId: patientId,
+                          patientName: patientName,
+                          status: status,
+                          dateTimestamp: dateTimestamp,
+                          slot: slot,
+                          bedName: bedName,
+                          oldBedId: bedId,
+                        );
+                      },
                     );
                   }
-
-                  return ListView.builder(
-                    itemCount: filteredAppointments.length,
-                    itemBuilder: (context, index) {
-                      final doc = filteredAppointments[index];
-                      // FIX 8: Safely handle data retrieval
-                      final data = doc.data() as Map<String, dynamic>? ?? {};
-                      final appointmentId = doc.id;
-                      final patientId = data['patientId']?.toString() ?? 'N/A';
-                      final patientName = _getPatientNameSync(patientId);
-                      final status = data['status']?.toString() ?? 'Pending';
-                      final dateTimestamp = data['date'] as Timestamp?;
-                      final slot = data['slot']?.toString() ?? 'N/A';
-                      final bedName = data['bedName']?.toString();
-                      final oldBedId = data['bedId']?.toString();
-
-                      return _buildAppointmentCard(
-                        appointmentId: appointmentId,
-                        patientId: patientId,
-                        patientName: patientName,
-                        status: status,
-                        dateTimestamp: dateTimestamp,
-                        slot: slot,
-                        bedName: bedName,
-                        oldBedId: oldBedId,
-                      );
-                    },
-                  );
                 },
               ),
             ),
@@ -1052,12 +1070,170 @@ class _NurseAppointmentsPageState extends State<NurseAppointmentsPage> {
       ),
     );
   }
+
+  // -------------------- AUTO PROCESSOR (CLIENT) --------------------
+  void _startClientAutoProcessor() {
+    // run once immediately
+    _processDueAutoTasksClient();
+
+    // then schedule periodic runs
+    _clientProcessorTimer?.cancel();
+    _clientProcessorTimer = Timer.periodic(const Duration(minutes: CLIENT_PROCESS_INTERVAL_MINUTES), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      _processDueAutoTasksClient();
+    });
+  }
+
+  Future<void> _processDueAutoTasksClient() async {
+    try {
+      final now = DateTime.now();
+      final snap = await FirebaseFirestore.instance
+          .collection('appointments')
+          .where('status', whereIn: ['pending', 'approved', 'rescheduled', 'showed'])
+          .get();
+
+      for (var doc in snap.docs) {
+        final data = doc.data() as Map<String, dynamic>? ?? {};
+        final appointmentId = doc.id;
+        final status = (data['status'] ?? '').toString().toLowerCase();
+        final Timestamp? dateTs = data['date'] as Timestamp?;
+        final String slot = (data['slot'] as String?) ?? _slots.first;
+        final int durationMinutes = (data['durationMinutes'] as int?) ?? DEFAULT_SESSION_DURATION_MINUTES;
+        final String lastUpdatedBy = (data['lastUpdatedBy'] as String?) ?? 'unknown';
+
+        // compute accurate slot start using date + slot
+        final DateTime startDt = _slotStartDateTimeFor(dateTs, slot) ?? (dateTs?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0));
+
+        // auto-missed: if now >= start + AUTO_MISSED_HOURS and no nurse action
+        final missedTriggerTime = startDt.add(Duration(hours: AUTO_MISSED_HOURS));
+        final alreadyFinal = status == 'missed' || status == 'completed' || status == 'rejected' || status == 'removed';
+
+        if ((status == 'pending' || status == 'approved' || status == 'rescheduled') &&
+            now.isAfter(missedTriggerTime) &&
+            !alreadyFinal &&
+            lastUpdatedBy != 'nurse') {
+          // mark missed and attempt auto-reschedule
+          await _handleAutoMissAndRescheduleClient(appointmentId, data);
+        }
+
+        // auto-complete: if status == 'showed' and now >= start + duration
+        if (status == 'showed') {
+          final completeTriggerTime = startDt.add(Duration(minutes: durationMinutes));
+          if (now.isAfter(completeTriggerTime) && lastUpdatedBy != 'nurse') {
+            await _systemUpdateStatus(appointmentId, 'completed');
+          }
+        }
+      }
+    } catch (e) {
+      print("Client auto-processor error: $e");
+    }
+  }
+
+  Future<void> _handleAutoMissAndRescheduleClient(String appointmentId, Map<String, dynamic> appointmentData) async {
+    final firestore = FirebaseFirestore.instance;
+    try {
+      // mark missed (system origin)
+      await _systemUpdateStatus(appointmentId, 'missed', extraFields: {'autoMissedAt': FieldValue.serverTimestamp()});
+
+      final DateTime originalDate = (appointmentData['date'] as Timestamp?)?.toDate() ?? DateTime.now();
+      final String currentSlot = appointmentData['slot'] ?? _slots.first;
+
+      DateTime? selectedDate;
+      String? selectedSlot;
+      String? selectedBedId;
+
+      for (int dayOffset = 1; dayOffset <= AUTO_RESCHEDULE_SEARCH_DAYS; dayOffset++) {
+        final candidate = DateTime(originalDate.year, originalDate.month, originalDate.day).add(Duration(days: dayOffset));
+        final onlyDate = DateTime(candidate.year, candidate.month, candidate.day);
+
+        // fetch admin session statuses
+        final adminSnap = await firestore.collection('session')
+            .where('sessionDate', isEqualTo: Timestamp.fromDate(onlyDate))
+            .get();
+        final Map<String, bool> enabledMap = {for (var s in _slots) s: true};
+        for (var d in adminSnap.docs) {
+          final m = d.data() as Map<String, dynamic>? ?? {};
+          final slot = m['slot']?.toString();
+          final enabled = m['isActive'] as bool? ?? true;
+          if (slot != null && enabledMap.containsKey(slot)) enabledMap[slot] = enabled;
+        }
+
+        for (String slot in _slots) {
+          if (!(enabledMap[slot] ?? true)) continue;
+
+          final tsStart = Timestamp.fromDate(onlyDate);
+          final tsEnd = Timestamp.fromDate(onlyDate.add(const Duration(days: 1)));
+          final slotSnap = await firestore.collection('appointments')
+              .where('date', isGreaterThanOrEqualTo: tsStart)
+              .where('date', isLessThan: tsEnd)
+              .where('slot', isEqualTo: slot)
+              .where('status', whereIn: ['pending','approved','rescheduled'])
+              .get();
+
+          if (slotSnap.docs.length >= MAX_SLOTS_PER_WINDOW) continue;
+
+          // find bed with capacity
+          final bedCounts = await _fetchBedAssignmentCounts(Timestamp.fromDate(onlyDate), slot);
+          final bedsSnap = await firestore.collection('beds').where('isWorking', isEqualTo: true).orderBy('name').get();
+          String? foundBedId;
+          for (var b in bedsSnap.docs) {
+            final bedId = b.id;
+            final count = bedCounts[bedId] ?? 0;
+            if (count < MAX_BED_CAPACITY) {
+              foundBedId = bedId;
+              break;
+            }
+          }
+
+          selectedDate = onlyDate;
+          selectedSlot = slot;
+          selectedBedId = foundBedId;
+          break;
+        }
+        if (selectedDate != null) break;
+      }
+
+      if (selectedDate != null && selectedSlot != null) {
+        // Do transactional reschedule + optional bed assign
+        final ok = await _assignBedAndUpdateAppointmentTransaction(
+          appointmentId,
+          status: 'rescheduled',
+          date: Timestamp.fromDate(selectedDate),
+          slot: selectedSlot,
+          preferredBedId: selectedBedId,
+          origin: 'system',
+          extraFields: {'autoRescheduled': true},
+        );
+        if (!ok) {
+          // if transaction fails, fallback to marking rescheduled without bed
+          await _systemUpdateStatus(appointmentId, 'rescheduled', date: Timestamp.fromDate(selectedDate), slot: selectedSlot, extraFields: {'autoRescheduled': true});
+        }
+      } else {
+        // unable to find slot; leave as missed (notification already created when marking missed)
+      }
+    } catch (e) {
+      print("Auto-reschedule client failed for $appointmentId: $e");
+    }
+  }
+
+  // Manual button to run auto-reschedule missed appointments
+  Future<void> _autoRescheduleMissedAppointments() async {
+    final snap = await FirebaseFirestore.instance.collection('appointments').where('status', isEqualTo: 'missed').get();
+    for (var doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      await _handleAutoMissAndRescheduleClient(doc.id, data);
+    }
+    _showMessage("Auto-reschedule pass completed.");
+  }
 }
 
 // -----------------------------------------------------------------
-// 3. NEW TABBED RESCHEDULE DIALOG WIDGET (Self-contained methods added)
+// RESCHEDULE DIALOG WIDGET
+// Removed bed selection – dialog only picks date + slot. System auto-assigns bed.
 // -----------------------------------------------------------------
-
 class RescheduleDialog extends StatefulWidget {
   final String appointmentId;
   final String patientId;
@@ -1067,9 +1243,8 @@ class RescheduleDialog extends StatefulWidget {
   final String? initialBedId;
   final List<String> slots;
   final bool isWideScreen;
-  final Function(String, String, {String? bedId, Timestamp? date, String? slot}) onConfirm;
-  // This signature is used by the logic in _buildBedsTab/SlotTab
-  final Future<Map<String, int>> Function(dynamic, dynamic) fetchBedAssignmentCounts;
+  final Future<void> Function(String, String, {String? bedId, Timestamp? date, String? slot}) onConfirm;
+  final Future<Map<String,int>> Function(dynamic, dynamic) fetchBedAssignmentCounts;
 
   const RescheduleDialog({
     super.key,
@@ -1092,26 +1267,18 @@ class RescheduleDialog extends StatefulWidget {
 class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerProviderStateMixin {
   late DateTime _selectedDate;
   String? _selectedSlot;
-  String? _selectedBedId;
-  String? _selectedBedName;
   late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    // Start from the old appointment details
     _selectedDate = widget.initialDate;
     _selectedSlot = widget.initialSlot;
-    _selectedBedId = widget.initialBedId;
     _tabController = TabController(length: 2, vsync: this);
 
-    // If a slot is pre-selected, move to the Beds tab
     if (_selectedSlot != null) {
-      // The delay ensures the tab controller is attached to the widget tree
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _tabController.index = 1;
-        }
+        if (mounted) _tabController.index = 1;
       });
     }
   }
@@ -1121,8 +1288,6 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     _tabController.dispose();
     super.dispose();
   }
-
-  // --- Handlers for date/slot/bed selection ---
 
   Future<void> _selectDate(BuildContext context) async {
     final newDate = await showDatePicker(
@@ -1134,10 +1299,7 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     if (newDate != null && newDate != _selectedDate) {
       setState(() {
         _selectedDate = newDate;
-        _selectedSlot = null; // Reset slot/bed when date changes
-        _selectedBedId = null;
-        _selectedBedName = null;
-        // Optionally jump back to the slots tab if date changed
+        _selectedSlot = null;
         _tabController.index = 0;
       });
     }
@@ -1146,20 +1308,10 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
   void _onSlotSelect(String slot) {
     setState(() {
       _selectedSlot = slot;
-      _selectedBedId = null; // Reset bed when slot changes
-      _selectedBedName = null;
-      _tabController.animateTo(1); // Move to beds tab
+      _tabController.animateTo(1);
     });
   }
 
-  void _onBedSelect(String bedId, String bedName) {
-    setState(() {
-      _selectedBedId = bedId;
-      _selectedBedName = bedName;
-    });
-  }
-
-  // --- NEW HELPER: Fetch Admin Slot Status from 'session' collection ---
   Future<Map<String, bool>> _fetchAdminSessionStatus(DateTime date) async {
     final DateTime onlyDate = DateTime(date.year, date.month, date.day);
     final snap = await FirebaseFirestore.instance
@@ -1180,7 +1332,6 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     return enabledMap;
   }
 
-  // --- NEW HELPER: Fetch Total Appointment Counts for Slots ---
   Future<Map<String, int>> _fetchAppointmentCounts(DateTime date) async {
     final DateTime onlyDate = DateTime(date.year, date.month, date.day);
     final Timestamp startOfDay = Timestamp.fromDate(onlyDate);
@@ -1205,10 +1356,7 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     return slotCounts;
   }
 
-
-  // --- SLOTS TAB WIDGET (Updated with Admin/Capacity Check) ---
   Widget _buildSlotsTab() {
-    // 1. Combine Admin Status and Appointment Counts concurrently
     final futureData = Future.wait([
       _fetchAdminSessionStatus(_selectedDate),
       _fetchAppointmentCounts(_selectedDate),
@@ -1219,18 +1367,12 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
       child: FutureBuilder<List<dynamic>>(
         future: futureData,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (!snapshot.hasData || snapshot.hasError) {
-            return Center(child: Text("Error loading slot data: ${snapshot.error ?? 'Unknown error'}", style: TextStyle(color: Colors.red)));
-          }
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData || snapshot.hasError) return Center(child: Text("Error loading slot data: ${snapshot.error ?? 'Unknown error'}", style: const TextStyle(color: Colors.red)));
 
-          // Data extracted from Future.wait results
           final Map<String, bool> enabledMap = snapshot.data![0] as Map<String, bool>;
           final Map<String, int> slotCounts = snapshot.data![1] as Map<String, int>;
-
-          const int maxSlots = 16; // Maximum slots available per time window (from BookPage)
+          const int maxSlots = MAX_SLOTS_PER_WINDOW;
 
           return ListView(
             children: widget.slots.map((s) {
@@ -1238,52 +1380,22 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
               bool slotFull = count >= maxSlots;
               bool adminDisabled = !(enabledMap[s] ?? true);
               bool isAvailable = !slotFull && !adminDisabled;
-
               bool isSelected = _selectedSlot == s;
 
-              // Determine status text and color
               String statusText = isAvailable ? "AVAILABLE" : (slotFull ? "FULL" : "CLOSED (Admin)");
-              final MaterialColor color = isAvailable
-                  ? Colors.green
-                  : (adminDisabled ? Colors.orange : Colors.red);
-
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12.0),
                 child: Card(
                   elevation: 2,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(
-                        color: isSelected ? Colors.blue[700]! : color[300]!,
-                        width: isSelected ? 3 : 1
-                    ),
-                  ),
                   child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                    leading: Icon(
-                      isSelected ? Icons.check_circle : (isAvailable ? Icons.check_circle_outline : Icons.cancel),
-                      color: isSelected ? Colors.blue[700] : color,
-                      size: 30,
-                    ),
-                    title: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    subtitle: Text(
-                      "Booked: $count / $maxSlots | Status: $statusText",
-                      style: TextStyle(color: color[700], fontSize: 13),
-                    ),
-                    trailing: ElevatedButton.icon(
-                      icon: const Icon(Icons.arrow_forward_ios, size: 16),
-                      label: Text(isSelected ? "Selected" : "Select"),
+                    leading: Icon(isSelected ? Icons.check_circle : (isAvailable ? Icons.check_circle_outline : Icons.cancel)),
+                    title: Text(s, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text("Booked: $count / $maxSlots | Status: $statusText"),
+                    trailing: ElevatedButton(
                       onPressed: isAvailable ? () => _onSlotSelect(s) : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isSelected ? Colors.blue[700] : color[600],
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
+                      child: Text(isSelected ? "Selected" : "Select"),
                     ),
-                    onTap: isAvailable ? () => _onSlotSelect(s) : null,
-                    tileColor: isSelected ? Colors.blue.withOpacity(0.05) : null,
                   ),
                 ),
               );
@@ -1294,8 +1406,8 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     );
   }
 
-  // --- BEDS TAB WIDGET (Moved from parent state) ---
   Widget _buildBedsTab() {
+    // This tab is informational only now – no bed selection allowed.
     if (_selectedSlot == null) {
       return Center(
         child: Padding(
@@ -1305,16 +1417,9 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
             children: [
               Icon(Icons.access_time_filled, color: Colors.red[400], size: 40),
               const SizedBox(height: 16),
-              const Text(
-                "Slot Selection Required",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
-              ),
+              const Text("Slot Selection Required", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              const Text(
-                "Please select a **time slot** first in the 'Slots' tab to accurately check real-time bed availability for that period.",
-                style: TextStyle(color: Colors.grey, fontSize: 15),
-                textAlign: TextAlign.center,
-              ),
+              const Text("Please select a time slot first in the 'Slots' tab to check real-time bed availability."),
             ],
           ),
         ),
@@ -1324,34 +1429,18 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     return Padding(
       padding: const EdgeInsets.all(16),
       child: FutureBuilder<Map<String, int>>(
-        // 1. Fetch capacity counts for the specific date/slot
         future: widget.fetchBedAssignmentCounts(_selectedDate, _selectedSlot!),
         builder: (context, assignmentSnap) {
-          if (assignmentSnap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
+          if (assignmentSnap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           final bedCounts = assignmentSnap.data ?? {};
-          const int maxCapacityPerBed = 4; // Max capacity per bed per slot
 
           return FutureBuilder<QuerySnapshot>(
-            // 2. Fetch ALL working beds
-            future: FirebaseFirestore.instance
-                .collection('beds')
-                .where('isWorking', isEqualTo: true)
-                .orderBy('name')
-                .get(),
+            future: FirebaseFirestore.instance.collection('beds').where('isWorking', isEqualTo: true).orderBy('name').get(),
             builder: (context, bedsSnap) {
-              if (bedsSnap.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (!bedsSnap.hasData || bedsSnap.data!.docs.isEmpty) {
-                return const Center(
-                    child: Text("No working beds are registered in the system."));
-              }
+              if (bedsSnap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+              if (!bedsSnap.hasData || bedsSnap.data!.docs.isEmpty) return const Center(child: Text("No working beds are registered."));
 
               return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Padding(
                     padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
@@ -1359,52 +1448,26 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text("Date: ${DateFormat('MMM d, yyyy').format(_selectedDate)}", style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                        Text("Slot: $_selectedSlot (Capacity: $maxCapacityPerBed/Bed)", style: TextStyle(color: Colors.grey[700], fontSize: 14)), // Using [] for safety
+                        Text("Slot: $_selectedSlot (Capacity: $MAX_BED_CAPACITY/Bed)", style: const TextStyle(fontSize: 14, color: Colors.grey)),
                       ],
                     ),
                   ),
                   Expanded(
                     child: ListView(
                       children: bedsSnap.data!.docs.map((bedDoc) {
-                        String bedId = bedDoc.id;
-                        String bedName = (bedDoc.data() as Map<String, dynamic>)['name'] ?? 'Bed ID: $bedId';
+                        final bedId = bedDoc.id;
+                        final bedData = bedDoc.data() as Map<String, dynamic>? ?? {};
+                        final bedName = bedData['name'] ?? 'Bed ID: $bedId';
                         final assignedCount = bedCounts[bedId] ?? 0;
-                        final isFull = assignedCount >= maxCapacityPerBed;
-                        final isSelected = _selectedBedId == bedId;
-
-                        final MaterialColor color = isFull ? Colors.red : Colors.green;
+                        final isFull = assignedCount >= MAX_BED_CAPACITY;
 
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8.0),
                           child: Card(
-                            elevation: 1,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              side: BorderSide(
-                                  color: isSelected ? Colors.blue[700]! : Colors.transparent, // Using [] for safety
-                                  width: isSelected ? 2 : 1
-                              ),
-                            ),
-                            child: RadioListTile<String>(
+                            child: ListTile(
                               title: Text(bedName, style: TextStyle(fontWeight: FontWeight.bold, color: isFull ? Colors.grey : Colors.black87)),
-                              subtitle: Text(
-                                "Assigned: $assignedCount / $maxCapacityPerBed",
-                                // FIX: Use [] accessor for MaterialColor
-                                style: TextStyle(color: color[700], fontSize: 13),
-                              ),
-                              value: bedId,
-                              groupValue: _selectedBedId,
-                              onChanged: isFull ? null : (String? value) {
-                                if (value != null) {
-                                  _onBedSelect(value, bedName);
-                                }
-                              },
-                              secondary: Icon(
-                                // FIX: Changed 'bed_time' to 'block'
-                                isFull ? Icons.block : Icons.bed,
-                                color: isFull ? Colors.red[300] : (isSelected ? Colors.blue[700] : Colors.grey),
-                              ),
-                              activeColor: Colors.blue[700], // Using [] for safety
+                              subtitle: Text("Assigned: $assignedCount / $MAX_BED_CAPACITY"),
+                              trailing: isFull ? const Icon(Icons.block) : const Icon(Icons.check_circle_outline),
                             ),
                           ),
                         );
@@ -1420,129 +1483,66 @@ class _RescheduleDialogState extends State<RescheduleDialog> with SingleTickerPr
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final bool canConfirm = _selectedSlot != null;
-    final bool isApproval = _selectedBedId != null;
-
-    // Determine the size of the dialog
-    final double dialogWidth = widget.isWideScreen ? 700.0 : MediaQuery.of(context).size.width * 0.9;
-    final double dialogHeight = widget.isWideScreen ? 600.0 : MediaQuery.of(context).size.height * 0.85;
+    final dialogWidth = widget.isWideScreen ? 700.0 : MediaQuery.of(context).size.width * 0.9;
+    final dialogHeight = widget.isWideScreen ? 600.0 : MediaQuery.of(context).size.height * 0.85;
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         width: dialogWidth,
         height: dialogHeight,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-        ),
         child: Column(
           children: [
-            // Header (AppBar style)
             AppBar(
               backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              title: Text(
-                "Reschedule Appointment for ${widget.patientName}",
-                style: const TextStyle(fontSize: 18),
-              ),
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
+              title: Text("Reschedule Appointment for ${widget.patientName}"),
+              leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).pop()),
             ),
-
-            // Date Selection and Tab Bar
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("Selected Date:", style: TextStyle(color: Colors.grey, fontSize: 13)),
-                      Text(
-                        DateFormat('yyyy-MM-dd').format(_selectedDate),
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.green),
-                      ),
-                    ],
-                  ),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text("Selected Date:", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                    Text(DateFormat('yyyy-MM-dd').format(_selectedDate), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: Colors.green)),
+                  ]),
                   ElevatedButton.icon(
                     onPressed: () => _selectDate(context),
                     icon: const Icon(Icons.calendar_month),
                     label: const Text("Change Date"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                   ),
                 ],
               ),
             ),
             const Divider(height: 1),
-
-            // Tabs
-            Container(
-              color: Colors.white,
-              child: TabBar(
-                controller: _tabController,
-                labelColor: Colors.blue,
-                unselectedLabelColor: Colors.grey,
-                indicatorColor: Colors.blue,
-                tabs: const [
-                  Tab(text: "Slots"),
-                  Tab(text: "Beds"),
-                ],
-              ),
-            ),
-
-            // Tab Content
+            TabBar(controller: _tabController, labelColor: Colors.blue, unselectedLabelColor: Colors.grey, tabs: const [Tab(text: "Slots"), Tab(text: "Beds")]),
             Expanded(
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  // Slots Tab Content
                   _buildSlotsTab(),
-                  // Beds Tab Content
                   _buildBedsTab(),
                 ],
               ),
             ),
-
-            // Confirm Button (Stuck at the bottom)
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: ElevatedButton(
-                onPressed: canConfirm
-                    ? () async {
-                  final newStatus = isApproval ? "approved" : "rescheduled";
-                  await widget.onConfirm(
-                    widget.appointmentId,
-                    newStatus,
-                    date: Timestamp.fromDate(_selectedDate),
-                    slot: _selectedSlot,
-                    bedId: isApproval ? _selectedBedId : null,
-                  );
+                onPressed: canConfirm ? () async {
+                  final newStatus = "rescheduled";
+                  await widget.onConfirm(widget.appointmentId, newStatus, date: Timestamp.fromDate(_selectedDate), slot: _selectedSlot);
                   if (mounted) Navigator.of(context).pop(true);
-                }
-                    : null,
+                } : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isApproval ? Colors.green : Colors.blue,
-                  foregroundColor: Colors.white,
-                  minimumSize: Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  backgroundColor: Colors.blue,
+                  minimumSize: const Size(double.infinity, 50),
                 ),
-                child: Text(
-                  isApproval ? "Confirm Reschedule & Approve" : "Confirm Reschedule",
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
+                child: const Text("Confirm Reschedule (bed will be auto-assigned)"),
               ),
             ),
           ],

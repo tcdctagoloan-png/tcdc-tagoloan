@@ -1,3 +1,5 @@
+// nurse_dashboard.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,13 +11,26 @@ import 'nurse_notifications.dart';
 import 'package:dialysis_app/reports/report_page.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
-// --- Imports for Dashboard Widgets ---
-import 'package:fl_chart/fl_chart.dart'; // For the circular chart
-import 'package:table_calendar/table_calendar.dart'; // For the calendar widget
-import 'package:intl/intl.dart'; // For date formatting
-// --- End: Imports for Dashboard Widgets ---
+// Charts & calendar
+import 'package:fl_chart/fl_chart.dart';
+import 'package:table_calendar/table_calendar.dart';
+import 'package:intl/intl.dart';
 
+// -----------------------------------------------------------------
+// Config
+// -----------------------------------------------------------------
+const int MAX_BED_CAPACITY = 4;
+const int WEEK_DAYS = 7;
+const List<String> DEFAULT_SLOTS = [
+  "06:00 - 10:00",
+  "10:00 - 14:00",
+  "14:00 - 18:00",
+  "18:00 - 22:00"
+];
 
+// -----------------------------------------------------------------
+// NurseDashboard Widget
+// -----------------------------------------------------------------
 class NurseDashboard extends StatefulWidget {
   final String nurseId;
   const NurseDashboard({super.key, required this.nurseId});
@@ -30,29 +45,50 @@ class _NurseDashboardState extends State<NurseDashboard> {
   int _unreadNotifications = 0;
   Future<DocumentSnapshot>? _nurseProfileFuture;
 
-  // --- State Variables ---
+  // Dashboard state
   DateTime _selectedDay = DateTime.now();
   DateTime _focusedDay = DateTime.now();
-  int _patientsWithSchedule = 0;
-  int _patientsWithoutSchedule = 0;
-  // Define the common height for the two middle cards for alignment
-  static const double _cardHeight = 350.0;
-  // --- End: State Variables ---
+
+  // summary counts (today)
+  int _totalPatientsToday = 0;
+  int _ongoingSessions = 0;
+  int _completedSessions = 0;
+  int _missedSessions = 0;
+  int _availableBeds = 0;
+  int _occupiedBeds = 0;
+
+  // UI card sizing
+  static const double _cardHeight = 320.0;
 
   late final List<Widget> _pages;
-  final List<String> _titles = [
-    "Home",
-    "Patients",
-    "Appointments",
-    "Notifications",
-    "Reports"
-  ];
+  late final List<String> _titles;
+
+  Timer? _nowTimer;
+
+  // caches
+  final Map<String, String> _patientNameCache = {};
 
   @override
   void initState() {
     super.initState();
     _nurseId = widget.nurseId;
+    _nurseProfileFuture = _fetchNurseProfile();
+    _listenUnreadNotifications();
 
+    // initial computations (do any non-context work here)
+    _computeTodaySummary();
+
+    // keep current time updated for header if used
+    _nowTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  // Build context-dependent things in didChangeDependencies
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _titles = ["Home", "Patients", "Appointments", "Notifications", "Reports"];
     _pages = [
       _buildHomeTab(),
       NursePatientsPage(nurseId: _nurseId),
@@ -60,50 +96,12 @@ class _NurseDashboardState extends State<NurseDashboard> {
       NurseNotificationPage(userId: _nurseId),
       ReportsPage(role: "nurse", userId: _nurseId),
     ];
-
-    _nurseProfileFuture = _fetchNurseProfile();
-    _listenUnreadNotifications();
-    _fetchPatientScheduleSummary();
   }
 
-  // --- Data Fetching Methods (No changes needed here) ---
-
-  Future<void> _fetchPatientScheduleSummary() async {
-    final allPatientsSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .where('role', isEqualTo: 'patient')
-        .get();
-
-    DateTime startOfToday = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-
-    final appointmentsSnapshot = await FirebaseFirestore.instance
-        .collection('appointments')
-        .where('date', isGreaterThanOrEqualTo: startOfToday)
-        .get();
-
-    final allPatientIds = allPatientsSnapshot.docs.map((doc) => doc.id).toSet();
-    final patientsWithAppointments = appointmentsSnapshot.docs
-        .map((doc) => doc['patientId'] as String)
-        .toSet();
-
-    if (mounted) {
-      setState(() {
-        _patientsWithSchedule = patientsWithAppointments.length;
-        _patientsWithoutSchedule = allPatientIds.difference(patientsWithAppointments).length;
-      });
-    }
-  }
-
-  Future<int> _fetchDailyAppointmentCount(DateTime day) async {
-    DateTime startOfDay = DateTime(day.year, day.month, day.day);
-    DateTime endOfDay = DateTime(day.year, day.month, day.day, 23, 59, 59);
-
-    final snapshot = await FirebaseFirestore.instance
-        .collection('appointments')
-        .where('date', isGreaterThanOrEqualTo: startOfDay)
-        .where('date', isLessThanOrEqualTo: endOfDay)
-        .get();
-    return snapshot.docs.length;
+  @override
+  void dispose() {
+    _nowTimer?.cancel();
+    super.dispose();
   }
 
   Future<DocumentSnapshot> _fetchNurseProfile() {
@@ -145,338 +143,589 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // --- UI Helpers ---
-
-  bool _isWideScreen(BuildContext context) =>
-      MediaQuery.of(context).size.width >= 650;
-
+  bool _isWideScreen(BuildContext context) => MediaQuery.of(context).size.width >= 900;
   void _onTap(int idx) => setState(() => _currentIndex = idx);
 
-  // ----------------------------------------------------------------------------------
-  // --- REDESIGNED: HOME TAB WITH EQUAL HEIGHT CARDS ---
-  // ----------------------------------------------------------------------------------
+  // ---------------------- Utilities / Cache ----------------------
+  Future<String> _getPatientName(String uid) async {
+    if (_patientNameCache.containsKey(uid)) return _patientNameCache[uid]!;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final name = (doc.data()?['fullName'] as String?) ?? 'Unknown';
+      _patientNameCache[uid] = name;
+      return name;
+    } catch (_) {
+      _patientNameCache[uid] = 'Unknown';
+      return 'Unknown';
+    }
+  }
+
+  DateTime _startOfDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+  DateTime _endOfDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day, 23, 59, 59);
+
+  // ---------------------- SUMMARY COMPUTATION (TODAY) ----------------------
+  Future<void> _computeTodaySummary() async {
+    try {
+      final start = Timestamp.fromDate(_startOfDay(DateTime.now()));
+      final end = Timestamp.fromDate(_endOfDay(DateTime.now()));
+
+      final apptSnap = await FirebaseFirestore.instance
+          .collection('appointments')
+          .where('date', isGreaterThanOrEqualTo: start)
+          .where('date', isLessThanOrEqualTo: end)
+          .get();
+
+      int total = apptSnap.docs.length;
+      int ongoing = 0;
+      int completed = 0;
+      int missed = 0;
+      final Set<String> occupiedBedIds = {};
+      for (var d in apptSnap.docs) {
+        final data = d.data() as Map<String, dynamic>? ?? {};
+        final status = (data['status'] ?? '').toString().toLowerCase();
+        if (status == 'showed' || status == 'in_process' || status == 'approved') ongoing++;
+        if (status == 'completed') completed++;
+        if (status == 'missed') missed++;
+        final bedId = (data['bedId'] as String?) ?? '';
+        if (bedId.isNotEmpty) occupiedBedIds.add(bedId);
+      }
+
+      // beds
+      final bedsSnap = await FirebaseFirestore.instance.collection('beds').where('isWorking', isEqualTo: true).get();
+      int bedsTotal = bedsSnap.docs.length;
+      int occupied = occupiedBedIds.length;
+      int available = bedsTotal - occupied;
+      if (available < 0) available = 0;
+
+      if (mounted) {
+        setState(() {
+          _totalPatientsToday = total;
+          _ongoingSessions = ongoing;
+          _completedSessions = completed;
+          _missedSessions = missed;
+          _occupiedBeds = occupied;
+          _availableBeds = available;
+        });
+      }
+    } catch (e) {
+      print("Error computing summary: $e");
+    }
+  }
+
+  // ---------------------- WEEKLY TRENDS DATA ----------------------
+  Future<Map<String, Map<String, int>>> _fetchWeeklyAppointmentAggregates() async {
+    final Map<String, Map<String, int>> result = {};
+    final now = DateTime.now();
+    final days = List<DateTime>.generate(WEEK_DAYS, (i) => _startOfDay(now.subtract(Duration(days: WEEK_DAYS - 1 - i))));
+    final start = Timestamp.fromDate(days.first);
+    final end = Timestamp.fromDate(_endOfDay(days.last));
+
+    final snap = await FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: start)
+        .where('date', isLessThanOrEqualTo: end)
+        .get();
+
+    for (var d in days) {
+      final key = DateFormat('EEE').format(d); // Mon, Tue, ...
+      result[key] = {'completed': 0, 'missed': 0, 'ongoing': 0};
+    }
+
+    for (var doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final Timestamp? ts = data['date'] as Timestamp?;
+      if (ts == null) continue;
+      final dt = ts.toDate();
+      final key = DateFormat('EEE').format(_startOfDay(dt));
+      if (!result.containsKey(key)) continue;
+      final status = (data['status'] ?? '').toString().toLowerCase();
+      if (status == 'completed') result[key]!['completed'] = (result[key]!['completed'] ?? 0) + 1;
+      else if (status == 'missed') result[key]!['missed'] = (result[key]!['missed'] ?? 0) + 1;
+      else if (status == 'showed' || status == 'in_process' || status == 'approved') result[key]!['ongoing'] = (result[key]!['ongoing'] ?? 0) + 1;
+    }
+
+    return result;
+  }
+
+  Future<Map<String, double>> _fetchWeeklyAvgDuration() async {
+    final Map<String, List<int>> durations = {};
+    final now = DateTime.now();
+    final days = List<DateTime>.generate(WEEK_DAYS, (i) => _startOfDay(now.subtract(Duration(days: WEEK_DAYS - 1 - i))));
+    final start = Timestamp.fromDate(days.first);
+    final end = Timestamp.fromDate(_endOfDay(days.last));
+
+    final snap = await FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: start)
+        .where('date', isLessThanOrEqualTo: end)
+        .get();
+
+    for (var d in days) durations[DateFormat('EEE').format(d)] = [];
+
+    for (var doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+      final ts = data['date'] as Timestamp?;
+      if (ts == null) continue;
+      final key = DateFormat('EEE').format(_startOfDay(ts.toDate()));
+      final int dur = (data['durationMinutes'] as int?) ?? 60;
+      durations[key]?.add(dur);
+    }
+
+    final Map<String, double> avg = {};
+    durations.forEach((k, list) {
+      if (list.isEmpty) avg[k] = 0.0;
+      else avg[k] = list.reduce((a, b) => a + b) / list.length;
+    });
+    return avg;
+  }
+
+  Future<Map<String, int>> _fetchBedOccupancyForDate(DateTime day) async {
+    final start = Timestamp.fromDate(_startOfDay(day));
+    final end = Timestamp.fromDate(_endOfDay(day));
+    final apptSnap = await FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: start)
+        .where('date', isLessThanOrEqualTo: end)
+        .get();
+
+    final Set<String> occupied = {};
+    for (var d in apptSnap.docs) {
+      final bedId = (d.data()?['bedId'] as String?) ?? '';
+      if (bedId.isNotEmpty) occupied.add(bedId);
+    }
+    final bedsSnap = await FirebaseFirestore.instance.collection('beds').where('isWorking', isEqualTo: true).get();
+    final totalBeds = bedsSnap.docs.length;
+    return {'occupied': occupied.length, 'available': (totalBeds - occupied.length).clamp(0, totalBeds)};
+  }
+
+  // ---------------------- BUILD HOME TAB (main) ----------------------
   Widget _buildHomeTab() {
+    final isWideLayout = _isWideScreen(context);
+
     return SingleChildScrollView(
       padding: const EdgeInsets.only(top: 0),
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 28.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Dashboard",
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              "Quick overview of appointment, capacity, and patient statistics.",
-              style: TextStyle(fontSize: 16, color: Colors.black54),
-            ),
-            const SizedBox(height: 30),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header
+          Row(children: [
+            const Text("Nurse Dashboard", style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 12),
+            Text(DateFormat('yyyy-MM-dd – HH:mm').format(DateTime.now()), style: const TextStyle(color: Colors.black54)),
+            const Spacer(),
+            ElevatedButton.icon(onPressed: () => setState((){}), icon: const Icon(Icons.refresh), label: const Text('Refresh'), style: ElevatedButton.styleFrom(backgroundColor: Colors.green)),
+          ]),
+          const SizedBox(height: 12),
+          const Text("Overview: Realtime appointment & capacity metrics", style: TextStyle(color: Colors.black54)),
+          const SizedBox(height: 18),
 
-            LayoutBuilder(
-              builder: (context, constraints) {
-                bool isWideLayout = constraints.maxWidth > 600;
+          // SUMMARY CARDS
+          LayoutBuilder(builder: (context, constraints) {
+            final isWide = constraints.maxWidth > 900;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _summaryCard("Total Patients Today", _totalPatientsToday, Icons.people, Colors.blue, width: isWide ? 220 : double.infinity),
+                _summaryCard("Ongoing Sessions", _ongoingSessions, Icons.play_circle_fill, Colors.orange, width: isWide ? 220 : double.infinity),
+                _summaryCard("Completed Today", _completedSessions, Icons.check_circle, Colors.green, width: isWide ? 220 : double.infinity),
+                _summaryCard("Missed Today", _missedSessions, Icons.warning, Colors.red, width: isWide ? 220 : double.infinity),
+                _summaryCard("Available Beds", _availableBeds, Icons.bed, Colors.teal, width: isWide ? 220 : double.infinity),
+                _summaryCard("Occupied Beds", _occupiedBeds, Icons.meeting_room, Colors.purple, width: isWide ? 220 : double.infinity),
+              ],
+            );
+          }),
 
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 1. TOP ROW: CALENDAR (Full Width)
-                    _buildCalendarCard(),
+          const SizedBox(height: 18),
 
-                    const SizedBox(height: 20),
+          // CHARTS + WHITEBOARD
+          LayoutBuilder(builder: (context, constraints) {
+            final wide = constraints.maxWidth > 1100;
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // charts row
+              wide
+                  ? Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 5, child: SizedBox(height: 340, child: _buildWeeklyBarChartCard())),
+                  const SizedBox(width: 16),
+                  Expanded(flex: 3, child: SizedBox(height: 340, child: _buildPieAndLineStack())),
+                ],
+              )
+                  : Column(children: [
+                SizedBox(height: 320, child: _buildWeeklyBarChartCard()),
+                const SizedBox(height: 12),
+                SizedBox(height: 320, child: _buildPieAndLineStack()),
+              ]),
 
-                    // 2. MIDDLE ROW: SCHEDULE SUMMARY & DAILY CAPACITY CHART (Equal Height)
-                    isWideLayout
-                        ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          flex: 5,
-                          // WRAP IN SIZEDBOX FOR FIXED HEIGHT
-                          child: SizedBox(
-                              height: _cardHeight,
-                              child: _buildScheduleSummaryCard()),
-                        ),
-                        const SizedBox(width: 20),
-                        Expanded(
-                          flex: 5,
-                          // WRAP IN SIZEDBOX FOR FIXED HEIGHT
-                          child: SizedBox(
-                              height: _cardHeight,
-                              child: _buildDailyCapacityCard(context)),
-                        ),
-                      ],
-                    )
-                        : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildScheduleSummaryCard(),
-                        const SizedBox(height: 20),
-                        _buildDailyCapacityCard(context),
-                      ],
+              const SizedBox(height: 18),
+
+              // Top patients table (kept from original)
+              _buildTopAppointmentsTable(),
+
+              const SizedBox(height: 18),
+
+              // WHITEBOARD SECTION
+              Card(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 3,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      const Text("Whiteboard — Bed Map", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 8),
+                      Text(DateFormat('yyyy-MM-dd').format(_selectedDay), style: const TextStyle(color: Colors.black54)),
+                      const Spacer(),
+                      IconButton(onPressed: () => setState(() { _computeTodaySummary(); }), icon: const Icon(Icons.refresh)),
+                    ]),
+                    const SizedBox(height: 8),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.65),
+                      child: _buildWhiteboardArea(),
                     ),
+                  ]),
+                ),
+              ),
+            ]);
+          }),
+        ]),
+      ),
+    );
+  }
 
-                    const SizedBox(height: 20),
+  // ---------------------- UI: summaryCard ----------------------
+  Widget _summaryCard(String title, int value, IconData icon, Color color, {double width = 220}) {
+    return Card(
+      elevation: 2,
+      child: Container(
+        width: width,
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            CircleAvatar(backgroundColor: color.withOpacity(0.15), child: Icon(icon, color: color)),
+            const SizedBox(width: 10),
+            Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold))),
+          ]),
+          const SizedBox(height: 14),
+          Text(value.toString(), style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: color)),
+        ]),
+      ),
+    );
+  }
 
-                    // 3. BOTTOM ROW: TOP PATIENTS TABLE (Full Width)
-                    _buildTopAppointmentsTable(),
+  // ---------------------- WEEKLY BAR CHART CARD ----------------------
+  Widget _buildWeeklyBarChartCard() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: FutureBuilder<Map<String, Map<String, int>>>(
+          future: _fetchWeeklyAppointmentAggregates(),
+          builder: (context, snap) {
+            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+            final data = snap.data!;
+            final labels = data.keys.toList();
+            final completed = labels.map((k) => data[k]!['completed'] ?? 0).toList();
+            final missed = labels.map((k) => data[k]!['missed'] ?? 0).toList();
+            final ongoing = labels.map((k) => data[k]!['ongoing'] ?? 0).toList();
 
-                  ],
-                );
+            final maxY = [
+              if (completed.isNotEmpty) completed.reduce((a, b) => a > b ? a : b),
+              if (missed.isNotEmpty) missed.reduce((a, b) => a > b ? a : b),
+              if (ongoing.isNotEmpty) ongoing.reduce((a, b) => a > b ? a : b)
+            ].fold<int>(0, (p, e) => p > e ? p : e) + 1;
+
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text("Weekly Appointments Overview", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                  child: BarChart(BarChartData(
+                    alignment: BarChartAlignment.spaceAround,
+                    maxY: maxY.toDouble() <= 0 ? 1 : maxY.toDouble(),
+                    groupsSpace: 12,
+                    barTouchData: BarTouchData(enabled: true),
+                    titlesData: FlTitlesData(
+                      leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+                      bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, meta) {
+                        final idx = v.toInt();
+                        if (idx < 0 || idx >= labels.length) return const SizedBox.shrink();
+                        return SideTitleWidget(
+                          meta: meta, // ✅ new API uses TitleMeta
+                          child: Text(
+                            labels[idx],
+                            style: const TextStyle(fontSize: 10),
+                          ),
+                        );
+                      })),
+                    ),
+                    barGroups: List.generate(labels.length, (i) {
+                      return BarChartGroupData(
+                        x: i,
+                        barsSpace: 4,
+                        barRods: [
+                          BarChartRodData(toY: completed[i].toDouble(), color: Colors.green, width: 8),
+                          BarChartRodData(toY: missed[i].toDouble(), color: Colors.redAccent, width: 8),
+                          BarChartRodData(toY: ongoing[i].toDouble(), color: Colors.blue, width: 8),
+                        ],
+                      );
+                    }),
+                  )),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(children: [
+                _legendDot('Completed', Colors.green),
+                const SizedBox(width: 8),
+                _legendDot('Missed', Colors.redAccent),
+                const SizedBox(width: 8),
+                _legendDot('Ongoing', Colors.blue),
+              ])
+            ]);
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _legendDot(String label, Color color) {
+    return Row(children: [Container(width: 10, height: 10, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3))), const SizedBox(width: 6), Text(label)]);
+  }
+
+  // ---------------------- PIE + LINE STACK ----------------------
+  Widget _buildPieAndLineStack() {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(children: [
+          const Text("Occupancy & Duration", style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Expanded(
+            child: FutureBuilder<Map<String, int>>(
+              future: _fetchBedOccupancyForDate(_selectedDay),
+              builder: (context, assignmentSnap) {
+                if (!assignmentSnap.hasData) return const Center(child: CircularProgressIndicator());
+                final occ = assignmentSnap.data!;
+                final occCount = occ['occupied'] ?? 0;
+                final availCount = occ['available'] ?? 0;
+                final total = (occCount + availCount) <= 0 ? 1 : (occCount + availCount);
+
+                return Column(children: [
+                  Expanded(
+                    child: Row(children: [
+                      Expanded(
+                        child: PieChart(PieChartData(
+                          sections: [
+                            PieChartSectionData(value: occCount.toDouble(), title: '$occCount', color: Colors.redAccent, radius: 50, titleStyle: const TextStyle(color: Colors.white)),
+                            PieChartSectionData(value: availCount.toDouble(), title: '$availCount', color: Colors.green, radius: 50, titleStyle: const TextStyle(color: Colors.white)),
+                          ],
+                          sectionsSpace: 2,
+                          centerSpaceRadius: 24,
+                        )),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FutureBuilder<Map<String, double>>(future: _fetchWeeklyAvgDuration(), builder: (context, durSnap) {
+                          if (!durSnap.hasData) return const Center(child: CircularProgressIndicator());
+                          final map = durSnap.data!;
+                          final labels = map.keys.toList();
+                          final values = map.values.toList();
+                          final spots = List.generate(values.length, (i) => FlSpot(i.toDouble(), values[i]));
+                          final maxY = (values.isEmpty ? 60.0 : (values.reduce((a, b) => a > b ? a : b) + 10.0));
+                          return LineChart(LineChartData(
+                            minX: 0,
+                            maxX: (labels.length - 1).toDouble(),
+                            minY: 0,
+                            maxY: maxY,
+                            titlesData: FlTitlesData(
+                              bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, meta) {
+                                final idx = v.toInt();
+                                if (idx < 0 || idx >= labels.length) return const SizedBox.shrink();
+                                return SideTitleWidget(
+                                  meta: meta, // ✅ new API uses TitleMeta instead of axisSide
+                                  child: Text(
+                                    labels[idx],
+                                    style: const TextStyle(fontSize: 10),
+                                  ),
+                                );
+                              })),
+                            ),
+                            lineBarsData: [LineChartBarData(spots: spots, isCurved: true, color: Colors.blue, barWidth: 3, dotData: FlDotData(show: true))],
+                          ));
+                        }),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(children: [ _legendDot('Occupied', Colors.redAccent), const SizedBox(width: 8), _legendDot('Available', Colors.green) ])
+                ]);
               },
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-
-  /// --- DATA VISUALIZATION WIDGETS ---
-
-  // Patient Schedule Summary Card (Removed fixed height container)
-  Widget _buildScheduleSummaryCard() {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      elevation: 4,
-      // Removed Container with fixed padding/height, let the content define it
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Patient Schedule Summary",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 15),
-            _summaryRow(
-              "Patients with Future Schedule",
-              _patientsWithSchedule,
-              Colors.blue,
-              Icons.check_circle_outline,
-            ),
-            const Divider(),
-            _summaryRow(
-              "Patients without Future Schedule",
-              _patientsWithoutSchedule,
-              Colors.red,
-              Icons.cancel_outlined,
-            ),
-            // Added Spacer to push content up and ensure the card fills the height
-            const Spacer(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Helper for Schedule Summary Rows (No change)
-  Widget _summaryRow(String title, int count, Color color, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: const TextStyle(fontSize: 16),
-              ),
-            ],
           ),
-          Text(
-            count.toString(),
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
+        ]),
       ),
     );
   }
 
-  // Daily Capacity Card (Circular Chart) (Removed fixed height container)
-  Widget _buildDailyCapacityCard(BuildContext context) {
-    const int maxDailyCapacity = 64;
+  // ---------------------- Whiteboard area (embedded) ----------------------
+  Widget _buildWhiteboardArea() {
+    final isWide = _isWideScreen(context);
 
-    return FutureBuilder<int>(
-      future: _fetchDailyAppointmentCount(_selectedDay),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          // Changed height to match _cardHeight
-          return Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            elevation: 4,
-            child: const SizedBox(
-                height: _cardHeight,
-                child: Center(child: CircularProgressIndicator())),
-          );
-        }
+    // stream beds
+    final bedsStream = FirebaseFirestore.instance.collection('beds').where('isWorking', isEqualTo: true).orderBy('name').snapshots();
 
-        int scheduledCount = snapshot.data ?? 0;
-        int remainingCapacity = maxDailyCapacity - scheduledCount;
-        double scheduledPercentage = maxDailyCapacity > 0 ? (scheduledCount / maxDailyCapacity) * 100 : 0;
+    // stream appointments for selectedDay
+    final start = Timestamp.fromDate(_startOfDay(_selectedDay));
+    final end = Timestamp.fromDate(_endOfDay(_selectedDay));
+    final appointmentsStream = FirebaseFirestore.instance
+        .collection('appointments')
+        .where('date', isGreaterThanOrEqualTo: start)
+        .where('date', isLessThanOrEqualTo: end)
+        .where('status', whereIn: ['approved','showed','in_process','rescheduled'])
+        .snapshots();
 
-        if (remainingCapacity < 0) remainingCapacity = 0;
+    return StreamBuilder<QuerySnapshot>(
+      stream: bedsStream,
+      builder: (context, bedSnap) {
+        if (bedSnap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        final bedDocs = bedSnap.data?.docs ?? [];
+        return StreamBuilder<QuerySnapshot>(
+          stream: appointmentsStream,
+          builder: (context, apptSnap) {
+            if (apptSnap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+            final apptDocs = apptSnap.data?.docs ?? [];
 
-        int chartScheduledCount = scheduledCount > maxDailyCapacity ? maxDailyCapacity : scheduledCount;
+            // map bedId -> assigned appointments
+            final Map<String, List<QueryDocumentSnapshot>> perBed = {};
+            final List<QueryDocumentSnapshot> unassigned = [];
 
-        return Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-          elevation: 4,
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Daily Capacity - ${DateFormat('MMM d, yyyy').format(_selectedDay)}",
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 20),
-                Expanded( // Use Expanded inside the column to let PieChart take available space
-                  child: PieChart(
-                    PieChartData(
-                      sectionsSpace: 2,
-                      centerSpaceRadius: 50,
-                      sections: [
-                        PieChartSectionData(
-                          color: Colors.lightGreen,
-                          value: chartScheduledCount.toDouble(),
-                          title: scheduledCount > 0 ? '${scheduledPercentage.toStringAsFixed(1)}%' : '',
-                          radius: 70,
-                          titleStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+            for (var d in apptDocs) {
+              final data = d.data() as Map<String, dynamic>? ?? {};
+              final bedId = (data['bedId'] as String?) ?? '';
+              if (bedId.isEmpty) unassigned.add(d);
+              else perBed.putIfAbsent(bedId, () => []).add(d);
+            }
+
+            if (isWide) {
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  ...bedDocs.map((bedDoc) {
+                    final bedId = bedDoc.id;
+                    final bedData = bedDoc.data() as Map<String, dynamic>? ?? {};
+                    final bedName = bedData['name'] ?? 'Bed $bedId';
+                    final assigned = perBed[bedId] ?? [];
+                    final count = assigned.length;
+                    final color = (count == 0) ? Colors.green : ((count < MAX_BED_CAPACITY) ? Colors.blue : Colors.red);
+
+                    return Container(
+                      width: 300,
+                      margin: const EdgeInsets.all(8),
+                      child: Card(
+                        elevation: 3,
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Row(children: [Text(bedName, style: const TextStyle(fontWeight: FontWeight.bold)), const Spacer(), Text('$count / $MAX_BED_CAPACITY', style: const TextStyle(fontWeight: FontWeight.w600))]),
+                            const Divider(),
+                            Expanded(
+                              child: assigned.isEmpty
+                                  ? Center(child: Text('No assignments', style: TextStyle(color: Colors.grey[600])))
+                                  : ListView(children: assigned.map((d) {
+                                final data = d.data() as Map<String, dynamic>? ?? {};
+                                final patientId = data['patientId'] ?? '';
+                                final slot = data['slot'] ?? '';
+                                return ListTile(
+                                  dense: true,
+                                  visualDensity: const VisualDensity(vertical: -3),
+                                  title: FutureBuilder<String>(future: _getPatientName(patientId), builder: (context, snap) => Text(snap.data ?? 'Patient')),
+                                  subtitle: Text(slot.toString()),
+                                  trailing: Container(width: 12, height: 12, decoration: BoxDecoration(color: color.withOpacity(0.9), borderRadius: BorderRadius.circular(6))),
+                                );
+                              }).toList()),
+                            ),
+                          ]),
                         ),
-                        PieChartSectionData(
-                          color: Colors.grey.shade300,
-                          value: remainingCapacity.toDouble(),
-                          title: remainingCapacity > 0 ? 'Remaining' : '',
-                          radius: 60,
-                          titleStyle: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black54,
-                          ),
-                        ),
-                      ],
+                      ),
+                    );
+                  }).toList(),
+
+                  // unassigned column
+                  Container(
+                    width: 300,
+                    margin: const EdgeInsets.all(8),
+                    child: Card(
+                      elevation: 3,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: const [Text('Unassigned', style: TextStyle(fontWeight: FontWeight.bold)), Spacer()]),
+                          const Divider(),
+                          Expanded(child: unassigned.isEmpty ? Center(child: Text('No unassigned')) : ListView(children: unassigned.map((d) {
+                            final data = d.data() as Map<String, dynamic>? ?? {};
+                            final pid = data['patientId'] ?? '';
+                            final slot = data['slot'] ?? '';
+                            return ListTile(dense: true, title: FutureBuilder<String>(future: _getPatientName(pid), builder: (context, snap) => Text(snap.data ?? 'Patient')), subtitle: Text(slot.toString()));
+                          }).toList()))
+                        ]),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Center(
-                  child: Text(
-                    "Scheduled: $scheduledCount / $maxDailyCapacity Patients",
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: scheduledCount > maxDailyCapacity ? Colors.red : Colors.black87
+                ]),
+              );
+            } else {
+              return ListView(padding: const EdgeInsets.all(8), children: [
+                ...bedDocs.map((bedDoc) {
+                  final bedId = bedDoc.id;
+                  final bedData = bedDoc.data() as Map<String, dynamic>? ?? {};
+                  final bedName = bedData['name'] ?? 'Bed $bedId';
+                  final assigned = perBed[bedId] ?? [];
+                  final count = assigned.length;
+
+                  return Card(
+                    elevation: 2,
+                    margin: const EdgeInsets.only(bottom: 10),
+                    child: ExpansionTile(
+                      title: Row(children: [Text(bedName, style: const TextStyle(fontWeight: FontWeight.bold)), const Spacer(), Text('$count / $MAX_BED_CAPACITY')]),
+                      children: assigned.isEmpty ? [Padding(padding: const EdgeInsets.all(12), child: Text('No assignments', style: TextStyle(color: Colors.grey[600])))] : assigned.map((d) {
+                        final data = d.data() as Map<String, dynamic>? ?? {};
+                        final pid = data['patientId'] ?? '';
+                        final slot = data['slot'] ?? '';
+                        return ListTile(dense: true, title: FutureBuilder<String>(future: _getPatientName(pid), builder: (context, snap) => Text(snap.data ?? 'Patient')), subtitle: Text(slot.toString()));
+                      }).toList(),
                     ),
-                  ),
-                ),
-                if (scheduledCount > maxDailyCapacity)
-                  const Center(
-                    child: Text(
-                      "Alert: Daily capacity exceeded!",
-                      style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+                  );
+                }).toList(),
+                if (unassigned.isNotEmpty)
+                  Card(
+                    elevation: 2,
+                    child: ExpansionTile(title: const Text('Unassigned'), children: unassigned.map((d) {
+                      final data = d.data() as Map<String, dynamic>? ?? {};
+                      final pid = data['patientId'] ?? '';
+                      final slot = data['slot'] ?? '';
+                      return ListTile(dense: true, title: FutureBuilder<String>(future: _getPatientName(pid), builder: (context, snap) => Text(snap.data ?? 'Patient')), subtitle: Text(slot.toString()));
+                    }).toList()),
+                  )
+              ]);
+            }
+          },
         );
       },
     );
   }
 
-  // Calendar Card (Top) (No change)
-  Widget _buildCalendarCard() {
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      elevation: 4,
-      child: TableCalendar(
-        firstDay: DateTime.utc(2020, 1, 1),
-        lastDay: DateTime.utc(2030, 12, 31),
-        focusedDay: _focusedDay,
-        selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-        calendarFormat: CalendarFormat.month,
-        headerStyle: const HeaderStyle(
-          formatButtonVisible: false,
-          titleCentered: true,
-        ),
-        onDaySelected: (selectedDay, focusedDay) {
-          if (!isSameDay(_selectedDay, selectedDay)) {
-            setState(() {
-              _selectedDay = selectedDay;
-              _focusedDay = focusedDay;
-            });
-          }
-        },
-        onPageChanged: (focusedDay) {
-          _focusedDay = focusedDay;
-        },
-      ),
-    );
-  }
-
-  // --- NEW Custom Table Row Widget for Full Width ---
-  Widget _buildCustomTableRow({
-    required Widget name,
-    required Widget address,
-    required Widget email,
-    required Widget contact,
-    required Widget count,
-    bool isHeader = false,
-  }) {
-    // Custom table layout using Expanded with flex to control width
-    // Name and Address get more space (flex: 3 and 3)
-    // Email and Contact get moderate space (flex: 2 and 2)
-    // Count gets minimal space (flex: 1)
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-      decoration: BoxDecoration(
-        color: isHeader ? Colors.green.shade50 : null,
-        border: Border(
-          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(flex: 3, child: name),
-          Expanded(flex: 3, child: address),
-          Expanded(flex: 2, child: email),
-          Expanded(flex: 2, child: contact),
-          Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: count)),
-        ],
-      ),
-    );
-  }
-
-  // Top Appointments Table (Redesigned with custom Expanded Row logic)
+  // ---------------------- Top Appointments Table (kept from original, compact) ----------------------
   Widget _buildTopAppointmentsTable() {
     return FutureBuilder<QuerySnapshot>(
       future: FirebaseFirestore.instance.collection('appointments').get(),
       builder: (context, appointmentSnapshot) {
         if (appointmentSnapshot.connectionState == ConnectionState.waiting) {
-          return Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            elevation: 4,
-            child: const SizedBox(height: 250, child: Center(child: CircularProgressIndicator())),
-          );
+          return Card(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 2, child: const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())));
         }
         if (appointmentSnapshot.hasError || !appointmentSnapshot.hasData) {
           return const Center(child: Text("Error loading appointments."));
@@ -488,83 +737,58 @@ class _NurseDashboardState extends State<NurseDashboard> {
           patientAppointmentCounts.update(patientId, (value) => value + 1, ifAbsent: () => 1);
         }
 
-        final sortedPatients = patientAppointmentCounts.entries.toList()
-          ..sort((a, b) => b.value.compareTo(a.value));
+        final sortedPatients = patientAppointmentCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
         final topAppointments = sortedPatients.take(5).toList();
-
         final requiredUserIds = topAppointments.map((e) => e.key).toList();
-
         if (requiredUserIds.isEmpty) {
           return _buildEmptyAppointmentsTable();
         }
 
-        // 3. Fetch Patient Details (Name, Email, Address, Contact)
         return FutureBuilder<QuerySnapshot>(
           future: FirebaseFirestore.instance.collection('users').where(FieldPath.documentId, whereIn: requiredUserIds).get(),
           builder: (context, userSnapshot) {
             if (userSnapshot.connectionState == ConnectionState.waiting) {
-              return Card(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                elevation: 4,
-                child: const SizedBox(height: 250, child: Center(child: CircularProgressIndicator())),
-              );
+              return Card(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 2, child: const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())));
             }
-            if (userSnapshot.hasError || !userSnapshot.hasData) {
-              return const Center(child: Text("Error loading patient names."));
-            }
+            if (userSnapshot.hasError || !userSnapshot.hasData) return const Center(child: Text("Error loading patient names."));
 
-            final patientDetails = {
-              for (var doc in userSnapshot.data!.docs) doc.id: {
-                'fullName': doc['fullName'] ?? 'N/A',
-                'email': doc['email'] ?? 'N/A',
-                'address': doc['address'] ?? 'N/A',
-                'contactNumber': doc['contactNumber'] ?? 'N/A',
-              }
-            };
+            final patientDetails = { for (var doc in userSnapshot.data!.docs) doc.id: { 'fullName': doc['fullName'] ?? 'N/A', 'email': doc['email'] ?? 'N/A', 'address': doc['address'] ?? 'N/A', 'contactNumber': doc['contactNumber'] ?? 'N/A' } };
 
             List<Widget> rows = topAppointments.map((entry) {
               final patientId = entry.key;
               final count = entry.value;
               final details = patientDetails[patientId] ?? {'fullName': 'Patient ID: $patientId', 'email': 'N/A', 'address': 'N/A', 'contactNumber': 'N/A'};
-
-              return _buildCustomTableRow(
-                name: Text(details['fullName']!, style: const TextStyle(fontWeight: FontWeight.w500)),
-                address: Text(details['address']!, overflow: TextOverflow.ellipsis),
-                email: Text(details['email']!, overflow: TextOverflow.ellipsis),
-                contact: Text(details['contactNumber']!),
-                count: Text(count.toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.grey.shade200))),
+                child: Row(children: [
+                  Expanded(flex: 3, child: Text(details['fullName']!, style: const TextStyle(fontWeight: FontWeight.w500))),
+                  Expanded(flex: 3, child: Text(details['address']!, overflow: TextOverflow.ellipsis)),
+                  Expanded(flex: 2, child: Text(details['email']!, overflow: TextOverflow.ellipsis)),
+                  Expanded(flex: 2, child: Text(details['contactNumber']!)),
+                  Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: Text(count.toString(), style: const TextStyle(fontWeight: FontWeight.bold)))),
+                ]),
               );
             }).toList();
 
             return Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 3,
               child: Container(
                 padding: const EdgeInsets.all(10),
                 width: double.infinity,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.all(10.0),
-                      child: Text(
-                        "Top 5 Patients by Appointments",
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    // Table Header
-                    _buildCustomTableRow(
-                      isHeader: true,
-                      name: const Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold)),
-                      address: const Text('Address', style: TextStyle(fontWeight: FontWeight.bold)),
-                      email: const Text('Email', style: TextStyle(fontWeight: FontWeight.bold)),
-                      contact: const Text('Contact', style: TextStyle(fontWeight: FontWeight.bold)),
-                      count: const Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                    // Table Rows
-                    ...rows,
-                  ],
-                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Padding(padding: EdgeInsets.all(8.0), child: Text("Top 5 Patients by Appointments (This Week)", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+                  // header
+                  Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), color: Colors.green.shade50, child: Row(children: const [
+                    Expanded(flex: 3, child: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 3, child: Text('Address', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('Contact', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: Text('Total', style: TextStyle(fontWeight: FontWeight.bold)))),
+                  ])),
+                  ...rows,
+                ]),
               ),
             );
           },
@@ -573,59 +797,37 @@ class _NurseDashboardState extends State<NurseDashboard> {
     );
   }
 
-  // Helper for empty appointments table (Redesigned with custom Expanded Row logic)
   Widget _buildEmptyAppointmentsTable() {
     return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 2,
       child: Container(
-        padding: const EdgeInsets.all(20),
-        width: double.infinity,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Top 5 Patients by Appointments",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            // Table Header
-            _buildCustomTableRow(
-              isHeader: true,
-              name: const Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold)),
-              address: const Text('Address', style: TextStyle(fontWeight: FontWeight.bold)),
-              email: const Text('Email', style: TextStyle(fontWeight: FontWeight.bold)),
-              contact: const Text('Contact', style: TextStyle(fontWeight: FontWeight.bold)),
-              count: const Text('Total Appointments', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-            // Empty Row
-            _buildCustomTableRow(
-              name: const Text("No appointments recorded"),
-              address: const Text("N/A"),
-              email: const Text("N/A"),
-              contact: const Text("N/A"),
-              count: const Text("0"),
-            ),
-          ],
-        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text("Top 5 Patients by Appointments", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), color: Colors.green.shade50, child: Row(children: const [
+            Expanded(flex: 3, child: Text('Patient Name', style: TextStyle(fontWeight: FontWeight.bold))),
+            Expanded(flex: 3, child: Text('Address', style: TextStyle(fontWeight: FontWeight.bold))),
+            Expanded(flex: 2, child: Text('Email', style: TextStyle(fontWeight: FontWeight.bold))),
+            Expanded(flex: 2, child: Text('Contact', style: TextStyle(fontWeight: FontWeight.bold))),
+            Expanded(flex: 1, child: Align(alignment: Alignment.centerRight, child: Text('Total', style: TextStyle(fontWeight: FontWeight.bold)))),
+          ])),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12), child: const Text("No appointments recorded this week.")),
+        ]),
       ),
     );
   }
 
-  // ----------------------------------------------------------------------------------
-  // --- MAIN BUILD METHOD (Web & Mobile Layout - No significant changes) ---
-  // ----------------------------------------------------------------------------------
-
+  // ---------------------- BUILD (Scaffold) ----------------------
   @override
   Widget build(BuildContext context) {
     if (!_isWideScreen(context)) {
-      // Mobile Layout (No change)
+      // Mobile layout
       return Scaffold(
         appBar: AppBar(
           title: Text(_titles[_currentIndex]),
-          actions: [
-            IconButton(icon: const Icon(Icons.logout), onPressed: _logout)
-          ],
+          actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)],
         ),
         body: _pages[_currentIndex],
         bottomNavigationBar: BottomNavigationBar(
@@ -635,212 +837,69 @@ class _NurseDashboardState extends State<NurseDashboard> {
           selectedItemColor: Colors.green,
           unselectedItemColor: Colors.grey,
           items: [
-            const BottomNavigationBarItem(
-                icon: Icon(Icons.home), label: "Home"),
-            const BottomNavigationBarItem(
-                icon: Icon(Icons.people), label: "Patients"),
-            const BottomNavigationBarItem(
-                icon: Icon(Icons.event_note), label: "Appointments"),
+            const BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+            const BottomNavigationBarItem(icon: Icon(Icons.people), label: "Patients"),
+            const BottomNavigationBarItem(icon: Icon(Icons.event_note), label: "Appointments"),
             BottomNavigationBarItem(
-              icon: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  const Icon(Icons.notifications),
-                  if (_unreadNotifications > 0)
-                    Positioned(
-                      right: -4,
-                      top: -4,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                        ),
-                        constraints:
-                        const BoxConstraints(minWidth: 18, minHeight: 18),
-                        child: Text(
-                          "$_unreadNotifications",
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+              icon: Stack(clipBehavior: Clip.none, children: [
+                const Icon(Icons.notifications),
+                if (_unreadNotifications > 0)
+                  Positioned(right: -4, top: -4, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), constraints: const BoxConstraints(minWidth: 18, minHeight: 18), child: Text("$_unreadNotifications", style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold), textAlign: TextAlign.center))),
+              ]),
               label: "Notifications",
             ),
-            const BottomNavigationBarItem(
-                icon: Icon(Icons.bar_chart), label: "Reports"),
+            const BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: "Reports"),
           ],
         ),
       );
     }
 
-    // Web Layout (No change)
+    // Web layout
     return Scaffold(
       backgroundColor: Colors.grey[100],
-      body: Row(
-        children: [
-          Container(
-            width: 240,
-            color: Colors.white,
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10),
-                  child: Column(
-                    children: [
-                      // Logo
-                      Image.asset(
-                        kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png',
-                        height: 100,
-                        errorBuilder: (context, error, stackTrace) {
-                          return const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(Icons.broken_image, size: 50, color: Colors.red),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        "TOTAL CARE DIALYSIS CENTER",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green),
-                      ),
-                      const Text(
-                        "TAGOLOAN BRANCH",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.black54),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, color: Colors.black12),
-
-                // --- 2. Nurse Profile Section ---
-                FutureBuilder<DocumentSnapshot>(
-                  future: _nurseProfileFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const ListTile(
-                          title: Text("Loading Profile..."),
-                          leading: CircularProgressIndicator.adaptive());
-                    }
-                    if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
-                      return const ListTile(
-                          title: Text("Profile Error"),
-                          leading: Icon(Icons.person));
-                    }
-
-                    final data = snapshot.data!.data() as Map<String, dynamic>?;
-                    final nurseName = data?['fullName'] ?? 'Nurse User';
-                    final nurseEmail = data?['email'] ?? 'Unknown Email';
-
-                    return Container(
-                      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
-                      margin: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            backgroundColor: Colors.green,
-                            child: Icon(Icons.local_hospital_outlined, color: Colors.white),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  nurseName,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold, fontSize: 14),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  nurseEmail,
-                                  style: const TextStyle(
-                                      fontSize: 10, color: Colors.black54),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const Divider(height: 1, color: Colors.black12),
-
-                // --- 3. Navigation Items ---
-                _WebNavItem(
-                    icon: Icons.home_filled,
-                    label: "Home",
-                    index: 0,
-                    currentIndex: _currentIndex,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.people,
-                    label: "Patients",
-                    index: 1,
-                    currentIndex: _currentIndex,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.event_note,
-                    label: "Appointments",
-                    index: 2,
-                    currentIndex: _currentIndex,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.notifications_none,
-                    label: "Notifications",
-                    index: 3,
-                    currentIndex: _currentIndex,
-                    onTap: _onTap,
-                    badgeCount: _unreadNotifications),
-                _WebNavItem(
-                    icon: Icons.bar_chart,
-                    label: "Reports",
-                    index: 4,
-                    currentIndex: _currentIndex,
-                    onTap: _onTap),
-                const Spacer(),
-                const Divider(height: 1, color: Colors.black12),
-                ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.black),
-                  title: const Text("Logout",
-                      style: TextStyle(color: Colors.black, fontWeight: FontWeight.w600)),
-                  onTap: _logout,
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Container(
-              color: Colors.grey[100],
-              padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
-              child: _pages[_currentIndex],
-            ),
-          ),
-        ],
-      ),
+      body: Row(children: [
+        Container(
+          width: 240,
+          color: Colors.white,
+          child: Column(children: [
+            Container(padding: const EdgeInsets.only(top: 20, bottom: 10, left: 10, right: 10), child: Column(children: [
+              Image.asset(kIsWeb ? 'logo/TCDC-LOGO.png' : 'assets/logo/TCDC-LOGO.png', height: 100, errorBuilder: (context, error, stackTrace) => const Padding(padding: EdgeInsets.all(8.0), child: Icon(Icons.broken_image, size: 50, color: Colors.red))),
+              const SizedBox(height: 4),
+              const Text("TOTAL CARE DIALYSIS CENTER", textAlign: TextAlign.center, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.green)),
+              const Text("TAGOLOAN BRANCH", textAlign: TextAlign.center, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Colors.black54)),
+            ])),
+            const Divider(height: 1, color: Colors.black12),
+            FutureBuilder<DocumentSnapshot>(future: _nurseProfileFuture, builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) return const ListTile(title: Text("Loading Profile..."), leading: CircularProgressIndicator.adaptive());
+              if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) return const ListTile(title: Text("Profile Error"), leading: Icon(Icons.person));
+              final data = snapshot.data!.data() as Map<String, dynamic>?;
+              final nurseName = data?['fullName'] ?? 'Nurse User';
+              final nurseEmail = data?['email'] ?? 'Unknown Email';
+              return Container(
+                padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+                margin: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(10)),
+                child: Row(children: [const CircleAvatar(backgroundColor: Colors.green, child: Icon(Icons.local_hospital_outlined, color: Colors.white)), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(nurseName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis), Text(nurseEmail, style: const TextStyle(fontSize: 10, color: Colors.black54), overflow: TextOverflow.ellipsis),]),),]),
+              );
+            }),
+            const Divider(height: 1, color: Colors.black12),
+            _WebNavItem(icon: Icons.home_filled, label: "Home", index: 0, currentIndex: _currentIndex, onTap: _onTap),
+            _WebNavItem(icon: Icons.people, label: "Patients", index: 1, currentIndex: _currentIndex, onTap: _onTap),
+            _WebNavItem(icon: Icons.event_note, label: "Appointments", index: 2, currentIndex: _currentIndex, onTap: _onTap),
+            _WebNavItem(icon: Icons.notifications_none, label: "Notifications", index: 3, currentIndex: _currentIndex, onTap: _onTap, badgeCount: _unreadNotifications),
+            _WebNavItem(icon: Icons.bar_chart, label: "Reports", index: 4, currentIndex: _currentIndex, onTap: _onTap),
+            const Spacer(),
+            const Divider(height: 1, color: Colors.black12),
+            ListTile(leading: const Icon(Icons.logout, color: Colors.black), title: const Text("Logout", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w600)), onTap: _logout),
+          ]),
+        ),
+        Expanded(child: Container(color: Colors.grey[100], padding: const EdgeInsets.fromLTRB(28, 28, 28, 0), child: _pages[_currentIndex])),
+      ]),
     );
   }
 }
 
+// Web nav item helper
 class _WebNavItem extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -849,56 +908,21 @@ class _WebNavItem extends StatelessWidget {
   final void Function(int) onTap;
   final int badgeCount;
 
-  const _WebNavItem({
-    required this.icon,
-    required this.label,
-    required this.index,
-    required this.currentIndex,
-    required this.onTap,
-    this.badgeCount = 0,
-  });
+  const _WebNavItem({required this.icon, required this.label, required this.index, required this.currentIndex, required this.onTap, this.badgeCount = 0});
 
   @override
   Widget build(BuildContext context) {
     final isSelected = index == currentIndex;
     return ListTile(
-      leading: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Icon(icon, color: isSelected ? Colors.green : Colors.black54),
-          if (badgeCount > 0 && index == 3)
-            Positioned(
-              right: -4,
-              top: -4,
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: const BoxDecoration(
-                    color: Colors.red, shape: BoxShape.circle),
-                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                child: Text(
-                  '$badgeCount',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-        ],
-      ),
-      title: Text(
-        label,
-        style: TextStyle(
-          color: isSelected ? Colors.green : Colors.black87,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-        ),
-      ),
+      leading: Stack(clipBehavior: Clip.none, children: [
+        Icon(icon, color: isSelected ? Colors.green : Colors.black54),
+        if (badgeCount > 0 && index == 3)
+          Positioned(right: -4, top: -4, child: Container(padding: const EdgeInsets.all(4), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), constraints: const BoxConstraints(minWidth: 18, minHeight: 18), child: Text('$badgeCount', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold), textAlign: TextAlign.center))),
+      ]),
+      title: Text(label, style: TextStyle(color: isSelected ? Colors.green : Colors.black87, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500)),
       selected: isSelected,
       onTap: () => onTap(index),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       selectedTileColor: Colors.green.shade50,
     );
   }

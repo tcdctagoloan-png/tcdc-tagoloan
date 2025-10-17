@@ -13,31 +13,42 @@ class _BookPageState extends State<BookPage> {
   DateTime selectedDate = DateTime.now().add(const Duration(days: 1)); // Start with tomorrow's date
   final int maxBeds = 16; // Maximum capacity of beds per time slot
 
-  final List<String> allSlots = const [
-    "06:00 - 10:00",
-    "10:00 - 14:00",
-    "14:00 - 18:00",
-    "18:00 - 22:00"
+  /// Helper function: Converts 24-hour time (e.g. "13:00") to "1:00 PM"
+  String formatTime(String time24) {
+    final parts = time24.split(':');
+    int hour = int.parse(parts[0]);
+    final minute = parts[1];
+    final period = hour >= 12 ? 'PM' : 'AM';
+    if (hour == 0) hour = 12;
+    else if (hour > 12) hour -= 12;
+    return '$hour:${minute.padLeft(2, '0')} $period';
+  }
+
+  /// List of dialysis slots (converted to readable AM/PM format)
+  late final List<String> allSlots = [
+    '${formatTime("06:00")} - ${formatTime("10:00")}', // 6:00 AM – 10:00 AM
+    '${formatTime("10:00")} - ${formatTime("14:00")}', // 10:00 AM – 2:00 PM
+    '${formatTime("14:00")} - ${formatTime("18:00")}', // 2:00 PM – 6:00 PM
+    '${formatTime("18:00")} - ${formatTime("22:00")}', // 6:00 PM – 10:00 PM
   ];
 
   Future<void> _selectDate() async {
     DateTime? picked = await showDatePicker(
       context: context,
       initialDate: selectedDate,
-      // User is only allowed to book appointments starting from tomorrow
       firstDate: DateTime.now().add(const Duration(days: 1)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) {
         return Theme(
           data: ThemeData.light().copyWith(
             colorScheme: ColorScheme.light(
-              primary: Colors.green.shade700, // Header background color
-              onPrimary: Colors.white, // Header text color
-              onSurface: Colors.black87, // Body text color
+              primary: Colors.green.shade700,
+              onPrimary: Colors.white,
+              onSurface: Colors.black87,
             ),
             textButtonTheme: TextButtonThemeData(
               style: TextButton.styleFrom(
-                foregroundColor: Colors.green.shade700, // Button text color
+                foregroundColor: Colors.green.shade700,
               ),
             ),
           ),
@@ -55,8 +66,7 @@ class _BookPageState extends State<BookPage> {
 
   Future<void> _bookSlot(String slot) async {
     try {
-      // 1. CHECK FOR EXISTING ACTIVE BOOKING
-      // Prevents patient from having multiple active (pending/approved/rescheduled) appointments.
+      // Prevent patient from multiple active bookings
       QuerySnapshot existing = await FirebaseFirestore.instance
           .collection('appointments')
           .where('patientId', isEqualTo: widget.userId)
@@ -71,25 +81,24 @@ class _BookPageState extends State<BookPage> {
         return;
       }
 
-      // 2. CREATE NEW APPOINTMENT
+      // Create new appointment
       DocumentReference appointmentRef = await FirebaseFirestore.instance
           .collection('appointments')
           .add({
         'patientId': widget.userId,
-        // Store only the date part as a Timestamp for consistent querying
         'date': Timestamp.fromDate(
           DateTime(selectedDate.year, selectedDate.month, selectedDate.day),
         ),
         'slot': slot,
-        'bedName': null, // Bed will be assigned by the nurse/admin later
+        'bedName': null,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      // 3. CREATE NOTIFICATION FOR ADMINS/NURSES
+      // Notify nurse(s)
       await FirebaseFirestore.instance.collection('notifications').add({
-        'nurseId': 'all', // Targeting all administrative roles
-        'title': 'New Appointment',
+        'nurseId': 'all',
+        'title': 'New Appointment Request',
         'message': 'Patient booked $slot on ${selectedDate.toLocal().toString().split(' ')[0]}',
         'appointmentId': appointmentRef.id,
         'read': false,
@@ -116,30 +125,29 @@ class _BookPageState extends State<BookPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Date object containing only year, month, and day for query comparison
     DateTime onlyDate =
     DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-
     final isWideScreen = _isWideScreen(context);
 
-    // Common Widget for the Header (Date Selection)
     Widget dateHeader = Padding(
       padding: EdgeInsets.symmetric(horizontal: isWideScreen ? 0 : 16.0, vertical: 16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Primary Title: "Book Your Appointment"
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12.0),
-            child: Text(
-              "Book Your Appointment",
-              style: TextStyle(
-                fontSize: isWideScreen ? 28 : 24,
-                fontWeight: FontWeight.w900,
-                color: Colors.black87,
-              ),
+          Text(
+            "Book Your Appointment",
+            style: TextStyle(
+              fontSize: isWideScreen ? 28 : 24,
+              fontWeight: FontWeight.w900,
+              color: Colors.black87,
             ),
           ),
+          const SizedBox(height: 10),
+          Text(
+            "Operating Hours: 6:00 AM – 10:00 PM",
+            style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+          ),
+          const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -171,11 +179,8 @@ class _BookPageState extends State<BookPage> {
       ),
     );
 
-
-    // Common StreamBuilder Logic for Slot List
     Widget slotList = Expanded(
       child: StreamBuilder<QuerySnapshot>(
-        // 1. Stream for Admin Session Disablement
         stream: FirebaseFirestore.instance
             .collection('session')
             .where('sessionDate', isEqualTo: Timestamp.fromDate(onlyDate))
@@ -186,42 +191,25 @@ class _BookPageState extends State<BookPage> {
           }
 
           Map<String, bool> enabledMap = {for (var s in allSlots) s: true};
-
-          // Check which slots the admin has explicitly disabled
           for (var doc in sessionSnap.data?.docs ?? []) {
             String slot = doc['slot'];
             bool enabled = doc['isActive'] ?? true;
             enabledMap[slot] = enabled;
           }
 
-          // 2. Stream for Appointments Count
           return StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('appointments')
-                .where(
-              'date',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(onlyDate),
-            )
-                .where(
-              'date',
-              isLessThan: Timestamp.fromDate(
-                onlyDate.add(const Duration(days: 1)),
-              ),
-            )
-                .where('status',
-                whereIn: ['pending', 'approved', 'rescheduled'])
+                .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(onlyDate))
+                .where('date', isLessThan: Timestamp.fromDate(onlyDate.add(const Duration(days: 1))))
+                .where('status', whereIn: ['pending', 'approved', 'rescheduled'])
                 .snapshots(),
             builder: (context, appSnap) {
-              if (appSnap.connectionState ==
-                  ConnectionState.waiting) {
+              if (appSnap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator(color: Colors.green));
               }
 
-              // Initialize counts for all slots
-              Map<String, int> slotCounts =
-              {for (var s in allSlots) s: 0};
-
-              // Count active appointments per slot (LOGIC RETAINED)
+              Map<String, int> slotCounts = {for (var s in allSlots) s: 0};
               for (var doc in appSnap.data?.docs ?? []) {
                 String bookedSlot = doc['slot'];
                 if (slotCounts.containsKey(bookedSlot)) {
@@ -235,10 +223,7 @@ class _BookPageState extends State<BookPage> {
                 itemBuilder: (context, index) {
                   String slot = allSlots[index];
                   int bookedCount = slotCounts[slot] ?? 0;
-
-                  // Check availability based on 16 bed limit (LOGIC RETAINED)
                   bool slotFull = bookedCount >= maxBeds;
-                  // Check availability based on Admin control (LOGIC RETAINED)
                   bool adminDisabled = !(enabledMap[slot] ?? true);
                   bool isAvailable = !slotFull && !adminDisabled;
 
@@ -260,19 +245,18 @@ class _BookPageState extends State<BookPage> {
                     cardColor = Colors.white;
                   }
 
-
                   return Card(
                     margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                     elevation: isAvailable ? 5 : 2,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                        side: BorderSide(color: isAvailable ? Colors.green.shade200 : cardColor, width: 1.5)
+                      borderRadius: BorderRadius.circular(15),
+                      side: BorderSide(color: isAvailable ? Colors.green.shade200 : cardColor, width: 1.5),
                     ),
                     color: cardColor,
                     child: ListTile(
                       contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
                       leading: Icon(
-                        isAvailable ? Icons.check_circle_outline : Icons.event_busy,
+                        isAvailable ? Icons.access_time_rounded : Icons.event_busy,
                         color: statusColor,
                         size: isWideScreen ? 30 : 24,
                       ),
@@ -322,9 +306,7 @@ class _BookPageState extends State<BookPage> {
       ),
     );
 
-
     if (!isWideScreen) {
-      // === MOBILE VERSION (Improved UI) ===
       return Scaffold(
         backgroundColor: Colors.grey.shade50,
         body: SafeArea(
@@ -338,9 +320,8 @@ class _BookPageState extends State<BookPage> {
       );
     }
 
-    // === WEB VERSION (Improved UI) ===
     return Scaffold(
-      backgroundColor: Colors.grey.shade100, // Subtle background
+      backgroundColor: Colors.grey.shade100,
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
