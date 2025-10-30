@@ -1,5 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 
 class AdminAppointmentsPage extends StatefulWidget {
   const AdminAppointmentsPage({super.key});
@@ -9,262 +10,202 @@ class AdminAppointmentsPage extends StatefulWidget {
 }
 
 class _AdminAppointmentsPageState extends State<AdminAppointmentsPage> {
-  DateTime selectedDate = DateTime.now();
-  List<String> allSessions = [
-    "06:00 - 10:00",
-    "10:00 - 14:00",
-    "14:00 - 18:00",
-    "18:00 - 22:00"
+  DateTime selectedDate = DateTime.now(); // Default date
+  final List<Map<String, dynamic>> defaultSlots = [
+    {'label': '3:00 AM - 7:00 AM', 'startHour': 3, 'endHour': 7},
+    {'label': '7:30 AM - 11:30 AM', 'startHour': 7, 'endHour': 11},
+    {'label': '12:30 PM - 4:30 PM', 'startHour': 12, 'endHour': 16},
   ];
 
-  // Unified messaging function for web and mobile
-  void _showMessage(BuildContext context, String message, {bool isError = false}) {
-    bool isWideScreen = MediaQuery.of(context).size.width >= 900;
-
-    if (isWideScreen) {
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(isError ? "Error" : "Success"),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text("OK"),
-            ),
-          ],
-        ),
-      );
-    } else {
-      final snackBar = SnackBar(
-        content: Text(message),
+  // Show success/error message
+  void _showMessage(String msg, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
         backgroundColor: isError ? Colors.red : Colors.green,
-      );
-      ScaffoldMessenger.of(context).showSnackBar(snackBar);
+      ),
+    );
+  }
+
+  // Initialize default slots if they don't exist for the selected date
+  Future<void> _initializeSlotsForSelectedDate() async {
+    final firestore = FirebaseFirestore.instance.collection('session');
+    final existing = await firestore
+        .where('sessionDate', isEqualTo: Timestamp.fromDate(selectedDate))
+        .get();
+
+    // If there are no existing slots for the selected date, initialize them
+    for (var i = 0; i < defaultSlots.length; i++) {
+      final s = defaultSlots[i];
+      final startTime = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, s['startHour']);
+      final endTime = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, s['endHour']);
+
+      final slotExists = existing.docs.any((doc) => doc['time'] == s['label']); // Check if this slot already exists
+
+      if (!slotExists) {
+        // If slot does not exist for this date, add it
+        await firestore.add({
+          'slotId': 'slot${i + 1}',
+          'time': s['label'],
+          'startTime': Timestamp.fromDate(startTime),
+          'endTime': Timestamp.fromDate(endTime),
+          'isActive': true, // Slot available by default
+          'status': 'available',
+          'assignedPatients': [],
+          'sessionDate': Timestamp.fromDate(selectedDate),
+          'availableDays': ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        });
+      }
+    }
+    _showMessage("Default slots initialized for ${DateFormat('MMMM d, yyyy').format(selectedDate)}.");
+  }
+
+  // Function to allow admin to select a date and update availability
+  Future<void> _selectDateAndUpdateSlotStatus(String id) async {
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: selectedDate,
+      firstDate: DateTime.now(),
+      lastDate: DateTime(2100),
+    );
+
+    if (pickedDate != null) {
+      setState(() {
+        selectedDate = pickedDate;
+      });
+      await _initializeSlotsForSelectedDate(); // Reinitialize the slots for the new selected date
     }
   }
 
-  Future<void> toggleSession(String slot, bool current) async {
-    final newStatus = !current;
-    final statusText = newStatus ? "available" : "unavailable";
+  // Toggle availability of a slot
+  Future<void> _toggleActive(String id, bool newValue) async {
+    try {
+      await FirebaseFirestore.instance.collection('session').doc(id).update({
+        'isActive': newValue,
+        'status': newValue ? 'available' : 'unavailable',
+      });
+      _showMessage("Slot ${newValue ? 'enabled' : 'disabled'}");
+    } catch (e) {
+      _showMessage("Failed to update: $e", isError: true);
+    }
+  }
 
+  // Delete a session slot
+  Future<void> _deleteSlot(String id) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Confirm Change", style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Text("Are you sure you want to mark slot '$slot' as $statusText?"),
+        title: const Text("Delete Slot"),
+        content: const Text("Are you sure you want to delete this slot?"),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text("Cancel")),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
           ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: newStatus ? Colors.green : Colors.red,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text("Yes")),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Delete"),
+          ),
         ],
       ),
     );
 
-    if (confirm != true) return;
-
-    final sessionDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-
-    try {
-      final query = await FirebaseFirestore.instance
-          .collection("session")
-          .where("sessionDate", isEqualTo: Timestamp.fromDate(sessionDate))
-          .where("slot", isEqualTo: slot)
-          .get();
-
-      String sessionId;
-      if (query.docs.isEmpty) {
-        final docRef = await FirebaseFirestore.instance.collection("session").add({
-          "sessionDate": Timestamp.fromDate(sessionDate),
-          "slot": slot,
-          "isActive": newStatus,
-          "bedId": null,
-          "patientId": null,
-          "nurseId": null,
-        });
-        sessionId = docRef.id;
-      } else {
-        sessionId = query.docs.first.id;
-        await FirebaseFirestore.instance.collection("session").doc(sessionId).update({"isActive": newStatus});
+    if (confirm == true) {
+      try {
+        await FirebaseFirestore.instance.collection('session').doc(id).delete();
+        _showMessage("Slot deleted");
+      } catch (e) {
+        _showMessage("Failed to delete: $e", isError: true);
       }
-
-      if (!mounted) return;
-      _showMessage(context, "Slot '$slot' marked as $statusText");
-
-      // Notify nurses
-      await FirebaseFirestore.instance.collection("notifications").add({
-        'role': 'nurse', // Target nurses
-        'title': "Slot $statusText",
-        'message': "Slot '$slot' on ${sessionDate.toLocal().toString().split(' ')[0]} is now $statusText.",
-        'createdAt': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
-
-      // Notify all patients
-      final patientsSnapshot = await FirebaseFirestore.instance.collection("users").where('role', isEqualTo: 'patient').get();
-      for (var patientDoc in patientsSnapshot.docs) {
-        await FirebaseFirestore.instance.collection("notifications").add({
-          'userId': patientDoc.id,
-          'title': "Slot $statusText",
-          'message': "Reminder: Slot '$slot' on ${sessionDate.toLocal().toString().split(' ')[0]} is now $statusText. ${!newStatus ? "This slot is not available today." : ""}",
-          'createdAt': FieldValue.serverTimestamp(),
-          'isRead': false,
-        });
-      }
-
-    } catch (e) {
-      _showMessage(context, "Failed to update slot: $e", isError: true);
     }
   }
 
-  bool _isWideScreen(BuildContext context) =>
-      MediaQuery.of(context).size.width >= 900;
+  @override
+  void initState() {
+    super.initState();
+    _initializeSlotsForSelectedDate(); // Ensure slots are initialized for the default date
+  }
 
   @override
   Widget build(BuildContext context) {
-    final onlyDate =
-    DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-
     return Scaffold(
-      floatingActionButton: _isWideScreen(context) ? null : FloatingActionButton.extended(
-        onPressed: () async {
-          DateTime? picked = await showDatePicker(
-            context: context,
-            initialDate: selectedDate,
-            firstDate: DateTime.now(),
-            lastDate: DateTime(2100),
-          );
-          if (picked != null) setState(() => selectedDate = picked);
-        },
-        label: const Text("Change Date"),
-        icon: const Icon(Icons.calendar_today),
-      ),
+      appBar: AppBar(title: const Text("Admin Slot Manager")),
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(12.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_isWideScreen(context))
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Appointments",
-                    style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87),
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: () async {
-                      DateTime? picked = await showDatePicker(
-                        context: context,
-                        initialDate: selectedDate,
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime(2100),
-                      );
-                      if (picked != null) setState(() => selectedDate = picked);
-                    },
-                    icon: const Icon(Icons.calendar_today, color: Colors.white),
-                    label: Text(
-                      "Appointments for ${onlyDate.toLocal().toString().split(' ')[0]}",
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 0,
-                    ),
-                  ),
-                ],
-              )
-            else
-              Text(
-                "Appointments for ${onlyDate.toLocal().toString().split(' ')[0]}",
-                style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87),
-              ),
-            const SizedBox(height: 24),
+            // Header section with Date and Change Button
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "Appointments for ${DateFormat('MMMM d, yyyy').format(selectedDate)}",
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: selectedDate,
+                      firstDate: DateTime.now(),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null) setState(() => selectedDate = picked);
+                    await _initializeSlotsForSelectedDate(); // Reinitialize the slots for the new selected date
+                  },
+                  icon: const Icon(Icons.calendar_today),
+                  label: const Text("Change Date"),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Session Slot List
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
-                    .collection("session")
-                    .where("sessionDate",
-                    isEqualTo: Timestamp.fromDate(onlyDate))
+                    .collection('session')
+                    .where('sessionDate', isEqualTo: Timestamp.fromDate(selectedDate))
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState ==
-                      ConnectionState.waiting) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
                   }
 
-                  Map<String, bool> enabledMap =
-                  {for (var slot in allSessions) slot: true};
-                  for (var doc in snapshot.data?.docs ?? []) {
-                    enabledMap[doc['slot']] = doc['isActive'] ?? true;
+                  final docs = snapshot.data?.docs ?? [];
+                  if (docs.isEmpty) {
+                    return const Center(child: Text("No slots available for the selected date."));
                   }
 
-                  return GridView.builder(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: _isWideScreen(context) ? 3 : 1,
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16,
-                      childAspectRatio: _isWideScreen(context) ? 2.5 : 4,
-                    ),
-                    itemCount: allSessions.length,
+                  return ListView.builder(
+                    itemCount: docs.length,
                     itemBuilder: (context, index) {
-                      final slot = allSessions[index];
-                      final enabled = enabledMap[slot] ?? true;
+                      final doc = docs[index];
+                      final data = doc.data() as Map<String, dynamic>? ?? {};
+                      final isActive = data['isActive'] as bool? ?? true;
+                      final timeLabel = data['time'] ?? '---';
+
                       return Card(
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(color: Colors.grey.shade200),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        child: ListTile(
+                          title: Text(timeLabel),
+                          subtitle: Text(isActive ? "Available" : "Unavailable"),
+                          leading: CircleAvatar(
+                            backgroundColor: isActive ? Colors.green : Colors.red,
+                            child: Text((index + 1).toString(), style: const TextStyle(color: Colors.white)),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    slot,
-                                    style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black87),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    enabled ? "Available" : "Unavailable",
-                                    style: TextStyle(
-                                      color: enabled ? Colors.green : Colors.red,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
                               Switch(
-                                value: enabled,
-                                onChanged: (_) => toggleSession(slot, enabled),
-                                activeColor: Colors.green,
+                                value: isActive,
+                                onChanged: (v) => _toggleActive(doc.id, v),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.edit, color: Colors.blue),
+                                onPressed: () => _selectDateAndUpdateSlotStatus(doc.id),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete, color: Colors.red),
+                                onPressed: () => _deleteSlot(doc.id),
                               ),
                             ],
                           ),

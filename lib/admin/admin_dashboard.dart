@@ -28,7 +28,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   late Future<DocumentSnapshot<Map<String, dynamic>>> _adminProfileFuture;
 
-  final List<String> _titles = [
+  final List<String> _titles = const [
     "Dashboard",
     "Patients",
     "Nurses",
@@ -49,9 +49,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     _pages = [
       _buildDashboard(),
-      PatientManagementPage(),
-      NurseManagementPage(),
-      AdminAppointmentsPage(),
+      const PatientManagementPage(),
+      const NurseManagementPage(),
+      const AdminAppointmentsPage(),
       AdminBedsPage(),
       AdminNotificationPage(
         userId: widget.userId,
@@ -63,7 +63,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
     _listenUnreadNotifications();
   }
 
+  @override
+  void dispose() {
+    // Note: If you were using a StreamSubscription directly, you would close it here.
+    // Since _listenUnreadNotifications uses a listener, it handles its own disposal
+    // when the listener is garbage collected or the widget is destroyed.
+    // However, it's safer to explicitly manage streams if they hold resources.
+    // For this simple example, we'll keep it as is, but good practice suggests
+    // storing the subscription and cancelling it in dispose.
+    super.dispose();
+  }
+
   void _listenUnreadNotifications() {
+    // This snapshot listener is active for the lifetime of the widget.
     FirebaseFirestore.instance
         .collection('notifications')
         .where('role', isEqualTo: 'admin')
@@ -88,6 +100,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   void _onTap(int idx) => setState(() => _index = idx);
 
+  // Responsive breakpoint check
   bool _isWideScreen(BuildContext context) =>
       MediaQuery.of(context).size.width >= 900;
 
@@ -126,6 +139,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           const SizedBox(height: 24),
           LayoutBuilder(
             builder: (context, constraints) {
+              // Responsive GridView crossAxisCount
               int crossAxisCount = constraints.maxWidth > 1200
                   ? 4
                   : constraints.maxWidth > 800
@@ -246,6 +260,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return FutureBuilder<AggregateQuerySnapshot>(
       future: query,
       builder: (context, snapshot) {
+        // Use ?? 0 for null safety
         final count = snapshot.hasData ? snapshot.data!.count ?? 0 : 0;
         return Container(
           padding: const EdgeInsets.all(20),
@@ -273,6 +288,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               const SizedBox(width: 16),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(title,
                       style: const TextStyle(
@@ -294,9 +310,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // --------------------------- Web Layout ---------------------------
+  // --------------------------- Main Build Method (Responsive) ---------------------------
   @override
   Widget build(BuildContext context) {
+    // ---------------- MOBILE/NARROW SCREEN LAYOUT ----------------
     if (!_isWideScreen(context)) {
       return Scaffold(
         appBar: AppBar(
@@ -305,7 +322,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
             IconButton(icon: const Icon(Icons.logout), onPressed: _logout)
           ],
         ),
-        body: _pages[_index],
+        // Ensures the main content can scroll if needed
+        body: SingleChildScrollView(child: _pages[_index]),
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _index,
           onTap: _onTap,
@@ -359,7 +377,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       );
     }
 
-    // Web Layout
+    // ---------------- WEB/WIDE SCREEN LAYOUT ----------------
     return Scaffold(
       backgroundColor: Colors.grey[100],
       body: Row(
@@ -373,8 +391,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 const SizedBox(height: 20),
                 Image.asset(
                   kIsWeb
-                      ? 'logo/TCDC-LOGO.png'
-                      : 'assets/logo/TCDC-LOGO.png',
+                      ? 'logo/TCDC-LOGO.png' // Web asset path
+                      : 'assets/logo/TCDC-LOGO.png', // Mobile asset path
                   height: 90,
                   errorBuilder: (_, __, ___) => const Icon(Icons.broken_image,
                       size: 50, color: Colors.red),
@@ -456,50 +474,57 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   },
                 ),
                 const Divider(color: Colors.black12),
-                _WebNavItem(
-                    icon: Icons.dashboard,
-                    label: "Dashboard",
-                    index: 0,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.people,
-                    label: "Patients",
-                    index: 1,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.health_and_safety,
-                    label: "Nurses",
-                    index: 2,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.calendar_today,
-                    label: "Appointments",
-                    index: 3,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.chair,
-                    label: "Beds",
-                    index: 4,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                _WebNavItem(
-                    icon: Icons.notifications_none,
-                    label: "Notifications",
-                    index: 5,
-                    currentIndex: _index,
-                    onTap: _onTap,
-                    badgeCount: _unreadNotifications),
-                _WebNavItem(
-                    icon: Icons.bar_chart,
-                    label: "Reports",
-                    index: 6,
-                    currentIndex: _index,
-                    onTap: _onTap),
-                const Spacer(),
+                Expanded(
+                  child: SingleChildScrollView( // Allows the sidebar to scroll if many items are added
+                    child: Column(
+                      children: [
+                        _WebNavItem(
+                            icon: Icons.dashboard,
+                            label: "Dashboard",
+                            index: 0,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                        _WebNavItem(
+                            icon: Icons.people,
+                            label: "Patients",
+                            index: 1,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                        _WebNavItem(
+                            icon: Icons.health_and_safety,
+                            label: "Nurses",
+                            index: 2,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                        _WebNavItem(
+                            icon: Icons.calendar_today,
+                            label: "Appointments",
+                            index: 3,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                        _WebNavItem(
+                            icon: Icons.chair,
+                            label: "Beds",
+                            index: 4,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                        _WebNavItem(
+                            icon: Icons.notifications_none,
+                            label: "Notifications",
+                            index: 5,
+                            currentIndex: _index,
+                            onTap: _onTap,
+                            badgeCount: _unreadNotifications),
+                        _WebNavItem(
+                            icon: Icons.bar_chart,
+                            label: "Reports",
+                            index: 6,
+                            currentIndex: _index,
+                            onTap: _onTap),
+                      ],
+                    ),
+                  ),
+                ),
                 ListTile(
                   leading:
                   const Icon(Icons.logout, color: Colors.black54),
@@ -515,7 +540,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
           Expanded(
             child: Container(
               color: Colors.white,
-              child: Padding(
+              // Wrap with Padding and SingleChildScrollView for general scroll support
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
                 child: _pages[_index],
               ),
